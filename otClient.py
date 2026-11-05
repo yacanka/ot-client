@@ -8,6 +8,7 @@ time. Public operations raise OTError with user-facing, nonsecret messages.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import codecs
 from email.message import Message
 import hashlib
 import json
@@ -84,7 +85,7 @@ class Document:
     name: str
     title: str
     author: str
-    revision: int
+    revision: int = 0
 
     def __str__(self) -> str:
         title = self.title[:50] + "..." if len(self.title) > 50 else self.title
@@ -214,7 +215,10 @@ def _validated_base_url(base_url: str) -> str:
             and parsed.password is None
             and not parsed.query
             and not parsed.fragment
+            and "?" not in candidate
+            and "#" not in candidate
             and not any(character.isspace() for character in candidate)
+            and not any(ord(character) < 32 or ord(character) == 127 for character in candidate)
             and "\\" not in candidate
         )
         _ = parsed.port  # Validate the optional numeric port without resolving DNS.
@@ -258,13 +262,20 @@ class HttpClient:
         self.base_url = _validated_base_url(base_url)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise OTError("Zaman aşımı pozitif bir sayı olmalıdır.")
-        if not math.isfinite(timeout) or timeout <= 0:
+        try:
+            valid_timeout = math.isfinite(timeout) and timeout > 0
+        except OverflowError:
+            valid_timeout = False
+        if not valid_timeout:
             raise OTError("Zaman aşımı pozitif ve sonlu bir sayı olmalıdır.")
         if not isinstance(verify, (bool, str)) or (isinstance(verify, str) and not verify.strip()):
             raise OTError("TLS doğrulaması açık/kapalı veya bir CA sertifika dosyasının yolu olmalıdır.")
         self.timeout = timeout
         self.verify = verify
         self.session = requests.Session()
+        # Authentication belongs to the OT form. Prevent implicit .netrc Basic
+        # credentials while retaining environment proxy and CA configuration.
+        self.session.auth = lambda request: request
         if headers:
             self.session.headers.update(headers)
         if cookies:
@@ -473,7 +484,12 @@ def _validate_media_headers(
 
 def _validate_media_prefix(prefix: bytearray, allow_json: bool, allow_html: bool) -> None:
     """Catch recognizable service bodies even when their MIME is mislabeled."""
-    text = prefix.decode("utf-8", errors="ignore").lstrip("\ufeff \t\r\n")
+    encoding = "utf-8"
+    if prefix.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        encoding = "utf-32"
+    elif prefix.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        encoding = "utf-16"
+    text = prefix.decode(encoding, errors="ignore").lstrip("\ufeff \t\r\n")
     if _looks_like_login_html(text):
         raise OTError("Belge indirme: Sunucu dosya yerine giriş formunu döndürdü. Yeniden oturum açın.")
     if not allow_html and re.match(r"(?:<!doctype\s+html\b|<(?:html|head|body)\b)", text, re.IGNORECASE):

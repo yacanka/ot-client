@@ -14,7 +14,7 @@ from otClient import (
     Document,
     DownloadCancelled,
     DownloadResult,
-    otError,
+    OTError,
     safe_windows_filename,
 )
 from ot_app.settings import AppSettings
@@ -195,7 +195,7 @@ class DownloadWorkerTests(unittest.TestCase):
         return finished[0].payload
 
     def test_login_failure_is_fatal_and_never_marks_pending_items_successful(self):
-        self.client.login_error = otError("Oturum açılamadı")
+        self.client.login_error = OTError("Oturum açılamadı")
         self.make_worker([JobItem("1", "ABC"), JobItem("2", "DEF")]).run()
         events = self.collect()
         self.assertEqual(len([event for event in events if event.kind == "fatal"]), 1)
@@ -274,7 +274,7 @@ class DownloadWorkerTests(unittest.TestCase):
 
     def test_recoverable_search_error_allows_later_items_to_finish(self):
         self.client.results = {
-            "ABC": otError("Arama başarısız"),
+            "ABC": OTError("Arama başarısız"),
             "DEF": [document("2", "DEF.pdf")],
         }
         self.make_worker([JobItem("1", "ABC"), JobItem("2", "DEF")]).run()
@@ -287,7 +287,7 @@ class DownloadWorkerTests(unittest.TestCase):
 
     def test_recoverable_download_error_allows_later_items_to_finish(self):
         self.client.results = {"ABC": [document()], "DEF": [document("2", "DEF.pdf")]}
-        self.client.download_errors["1"] = otError("İndirme başarısız")
+        self.client.download_errors["1"] = OTError("İndirme başarısız")
         self.make_worker([JobItem("1", "ABC"), JobItem("2", "DEF")]).run()
         events = self.collect()
         self.assertEqual(self.statuses(events, "1")[-1], "error")
@@ -311,7 +311,7 @@ class DownloadWorkerTests(unittest.TestCase):
 
     def test_connector_construction_failure_still_finishes(self):
         def bad_factory(*args, **kwargs):
-            raise otError("Bağlantı oluşturulamadı")
+            raise OTError("Bağlantı oluşturulamadı")
 
         worker = DownloadWorker(
             self.settings, [JobItem("1", "ABC")], self.events, self.cancel,
@@ -484,11 +484,26 @@ class DownloadWorkerTests(unittest.TestCase):
         self.assertEqual(len(self.client.downloads), 1)
 
     def test_credentials_are_redacted_from_failure_events(self):
-        self.client.login_error = otError("Secret: " + self.settings.password)
+        self.client.login_error = OTError("Secret: " + self.settings.password)
         self.make_worker().run()
         events = self.collect()
         self.assertNotIn(self.settings.password, repr(events))
         self.assertTrue(any(event.kind == "fatal" for event in events))
+
+    def test_unexpected_error_does_not_disclose_arbitrary_upstream_details(self):
+        detail = "synthetic upstream token and private URL"
+        self.client.login_error = RuntimeError(detail)
+        self.make_worker().run()
+        events = self.collect()
+        self.assertNotIn(detail, repr(events))
+        self.assertTrue(any(event.kind == "fatal" for event in events))
+
+    def test_certificate_home_directory_is_expanded_for_downloads(self):
+        certificate = Path.home() / "test-ca.pem"
+        self.settings.ca_bundle = "~/test-ca.pem"
+        with mock.patch("ot_app.settings.Path.is_file", return_value=True):
+            self.make_worker().run()
+        self.assertEqual(self.client.arguments["verify"], str(certificate))
 
     def test_empty_job_does_not_contact_server(self):
         self.make_worker([]).run()

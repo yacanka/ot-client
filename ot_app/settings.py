@@ -7,6 +7,7 @@ an explicit in-memory session; passwords are never written to a fallback file.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sys
@@ -48,6 +49,13 @@ class AppSettings:
     verify_tls: bool = True
     remember_password: bool = True
 
+    @property
+    def tls_verify(self) -> bool | str:
+        """Return the TLS option used by both downloads and connection probes."""
+        if not self.verify_tls:
+            return False
+        return str(Path(self.ca_bundle).expanduser()) if self.ca_bundle else True
+
     def validate(self, require_connection: bool = False) -> None:
         labels = {
             "base_url": "Sunucu adresi", "username": "Kullanıcı adı",
@@ -87,6 +95,7 @@ class AppSettings:
                     or bool(parts.query) or bool(parts.fragment)
                     or "?" in base_url or "#" in base_url
                     or any(character.isspace() for character in base_url)
+                    or any(ord(character) < 32 or ord(character) == 127 for character in base_url)
                     or "\\" in base_url
                 )
                 _ = parts.port  # Also rejects malformed and out-of-range ports.
@@ -100,7 +109,7 @@ class AppSettings:
             output_path = Path(self.output_dir).expanduser()
             if output_path.exists() and not output_path.is_dir():
                 raise ValueError("İndirme yolu bir klasör olmalıdır.")
-            if self.ca_bundle.strip() and not Path(self.ca_bundle).expanduser().is_file():
+            if self.verify_tls and self.ca_bundle.strip() and not Path(self.ca_bundle).expanduser().is_file():
                 raise ValueError("CA sertifika dosyası bulunamadı veya bir dosya değil.")
         except (OSError, RuntimeError):
             raise ValueError("İndirme klasörü veya CA sertifika dosyası yolu okunamadı.") from None
@@ -114,6 +123,33 @@ class AppSettings:
 
 
 _CONFIG_FIELDS = tuple(item.name for item in fields(AppSettings) if item.name != "password")
+
+
+def _credential_context(settings: AppSettings) -> dict[str, str]:
+    return {"base_url": settings.base_url.strip().rstrip("/"), "username": settings.username.strip()}
+
+
+def _saved_password_binding(config_value) -> dict:
+    """Read additive credential metadata; legacy records retain their identity.
+
+    A ciphertext digest detects partial registry saves without storing a hash of
+    the plaintext password. Invalid/missing configuration never binds a secret
+    to newly entered connection details.
+    """
+    try:
+        if not isinstance(config_value, str) or len(config_value) > MAX_CONFIG_CHARACTERS:
+            return {}
+        config = json.loads(config_value)
+        if not isinstance(config, dict):
+            return {}
+        if "password_binding" in config:
+            binding = config["password_binding"]
+            return binding if isinstance(binding, dict) else {}
+        return _credential_context(AppSettings(
+            base_url=config.get("base_url", ""), username=config.get("username", "")
+        ))
+    except (ValueError, RecursionError, AttributeError):
+        return {}
 
 
 class _WindowsRegistry:
@@ -199,7 +235,8 @@ class RegistryStore:
             self._warnings["settings"] = "Kayıtlı ayarlar bozuk; varsayılan ayarlar açıldı. Belge listesi ve parola ayrı olarak okunur."
             return settings
         invalid_fields = "password" in config
-        for name in _CONFIG_FIELDS:
+        # Validate the CA path under the saved TLS choice, not the default.
+        for name in ("verify_tls", *(key for key in _CONFIG_FIELDS if key != "verify_tls")):
             if name not in config:
                 continue
             candidate = replace(settings, **{name: config[name]})
@@ -250,6 +287,7 @@ class RegistryStore:
             self._warnings["password"] = "Windows parola koruma hizmeti kullanılamıyor. Parola kalıcı olarak kaydedilemez."
         config_value = self._read_value(SETTINGS_VALUE, REG_SZ, "settings", "ayarlar")
         settings = self._load_config(config_value)
+        binding = _saved_password_binding(config_value)
         document_value = self._read_value(DOCUMENTS_VALUE, REG_MULTI_SZ, "documents", "belge listesi")
         documents = self._load_documents(document_value)
         if settings.remember_password:
@@ -258,12 +296,16 @@ class RegistryStore:
                 try:
                     if not isinstance(protected, bytes) or len(protected) > MAX_SECRET_BYTES or self._protector is None:
                         raise ValueError
+                    if any(binding.get(key) != value for key, value in _credential_context(settings).items()):
+                        raise ValueError
+                    if "ciphertext_sha256" in binding and binding["ciphertext_sha256"] != hashlib.sha256(protected).hexdigest():
+                        raise ValueError
                     password = self._protector.unprotect(protected).decode("utf-8")
                     candidate = replace(settings, password=password)
                     candidate.validate()
                     settings = candidate
                 except (OSError, RuntimeError, ValueError, TypeError, AttributeError):
-                    self._warnings["password"] = "Kayıtlı parola çözülemedi; parolayı yeniden girin. Şifreli kayıt korundu; yeni parola kaydedilene veya hatırlama kapatılana kadar değiştirilmez."
+                    self._warnings["password"] = "Kayıtlı parola çözülemedi veya bağlantı bilgileriyle eşleşmiyor; parolayı yeniden girin. Şifreli kayıt korundu; yeni parola kaydedilene veya hatırlama kapatılana kadar değiştirilmez."
         return settings, documents
 
     def _save_error(self, message: str, *, category: str = "save_write") -> None:
@@ -291,7 +333,8 @@ class RegistryStore:
         """
         settings.validate()
         canonical = merge_document_numbers([], documents) if documents is not None else None
-        config = json.dumps({name: getattr(settings, name) for name in _CONFIG_FIELDS}, ensure_ascii=False, allow_nan=False)
+        config_values = {name: getattr(settings, name) for name in _CONFIG_FIELDS}
+        config = json.dumps(config_values, ensure_ascii=False, allow_nan=False)
         if len(config) > MAX_CONFIG_CHARACTERS:
             raise ValueError("Ayarlar izin verilen toplam boyutu aşıyor.")
         if self._session_only:
@@ -309,6 +352,15 @@ class RegistryStore:
                     raise ValueError
             except (OSError, RuntimeError, ValueError, TypeError):
                 self._save_error("Parola Windows DPAPI ile korunamadı. Hiçbir ayar kaydedilmedi; mevcut kayıtlar korundu.")
+        if protected is not None:
+            binding = {**_credential_context(settings), "ciphertext_sha256": hashlib.sha256(protected).hexdigest()}
+        else:
+            old_config = self._read_value(SETTINGS_VALUE, REG_SZ, "settings", "ayarlar")
+            binding = _saved_password_binding(old_config)
+        config_values["password_binding"] = binding
+        config = json.dumps(config_values, ensure_ascii=False, allow_nan=False)
+        if len(config) > MAX_CONFIG_CHARACTERS:
+            raise ValueError("Ayarlar izin verilen toplam boyutu aşıyor.")
         # DPAPI is completed before registry changes. Secret changes are last,
         # so a configuration/queue write failure cannot remove a saved password.
         try:

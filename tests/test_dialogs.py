@@ -1,13 +1,14 @@
 """Display-driven checks for settings editing and deliberate modal actions."""
 
 import os
+import sys
 import tempfile
 import traceback
 import unittest
 from pathlib import Path
 
 
-@unittest.skipUnless(os.name == "nt" or os.environ.get("DISPLAY"), "A graphical display is required")
+@unittest.skipUnless(os.name == "nt" or sys.platform == "darwin" or os.environ.get("DISPLAY"), "A graphical display is required")
 class SettingsAndDialogTests(unittest.TestCase):
     def setUp(self):
         import tkinter as tk

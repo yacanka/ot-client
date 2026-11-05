@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from .theme import AMBER, BLUE, BORDER, GREEN, MUTED, RED, SURFACE, card
+from .theme import AMBER, BLUE, GREEN, MUTED, RED, card
 
 STATUS_LABELS = {
     "pending": "Bekliyor", "searching": "Aranıyor", "downloading": "İndiriliyor",

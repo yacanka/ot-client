@@ -7,14 +7,14 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from OTClient import OTConnector, OTError
+from otClient import OTConnector, OTError
 from .actions import DocumentActions
 from .queue_model import QueueRow
 from .settings import AppSettings, RegistryStore, SettingsError
 from .settings_view import SettingsView
-from .theme import AMBER, BG, BLUE, GREEN, MUTED, NAV, NAV_ACTIVE, RED, apply_theme, human_bytes
+from .theme import AMBER, BG, BLUE, MUTED, NAV, NAV_ACTIVE, RED, apply_theme, human_bytes
 from .views import DocumentsView, PROBLEMS, STATUS_LABELS, SUCCESS
-from .worker import DownloadWorker, JobItem, WorkerEvent
+from .worker import DownloadWorker, JobItem, WorkerEvent, safe_error_message
 
 
 class Application(DocumentActions, tk.Tk):
@@ -163,7 +163,8 @@ class Application(DocumentActions, tk.Tk):
 
     def _row_values(self, row):
         title = row.document.title or row.document.name if row.document else "İşlem sırasında doldurulacak"
-        return row.number, title, STATUS_LABELS.get(row.status, row.status), human_bytes(row.size)
+        revision = row.document.revision if row.document else "—"
+        return row.number, title, revision, STATUS_LABELS.get(row.status, row.status), human_bytes(row.size)
 
     def refresh_table(self):
         if self._refresh_after:
@@ -343,16 +344,15 @@ class Application(DocumentActions, tk.Tk):
         try:
             if self.cancel_event.is_set():
                 return
-            verify = (settings.ca_bundle or True) if settings.verify_tls else False
             connector = self.connector_factory(settings.base_url, settings.username, settings.password,
-                                                timeout=settings.timeout, verify=verify,
+                                                timeout=settings.timeout, verify=settings.tls_verify,
                                                 folder_id=settings.folder_id)
             if connector.test_connection() is not True:
                 raise OTError("Oturum ve belge erişimi doğrulanamadı.")
             if not self.cancel_event.is_set():
                 self.events.put(WorkerEvent("connection_result", payload={"success": True, "message": "Bağlantı başarılı. Belge arama servisine erişim doğrulandı."}))
         except Exception as exc:
-            text = str(exc).replace(settings.password, "[gizlendi]") if settings.password else str(exc)
+            text = safe_error_message(exc, settings.password)
             self.events.put(WorkerEvent("connection_result", payload={"success": False, "message": text}))
         finally:
             if connector is not None:

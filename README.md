@@ -20,10 +20,10 @@ CMD kurulumunu kullanmak zorunda değilsiniz. Uygulama klasöründe:
 
 ```bat
 py -3.11 -m pip install -r requirements.txt
-py -3.11 OT_desktop.pyw
+py -3.11 ot_desktop.pyw
 ```
 
-Başka bir uygun Python seçtiyseniz aynı komutlarda onu kullanın. `python OT_desktop.pyw` da etkin ortamla çalışır. `Baslat.cmd` ise uygulamanın kendi `.venv` ortamını kullanır.
+Başka bir uygun Python seçtiyseniz aynı komutlarda onu kullanın. `python ot_desktop.pyw` da etkin ortamla çalışır. `Baslat.cmd` ise uygulamanın kendi `.venv` ortamını kullanır.
 
 ## Belge listesi
 
@@ -101,13 +101,13 @@ HKEY_CURRENT_USER\Software\OTDesktop
 
 | Kayıt | Tür | İçerik |
 |---|---|---|
-| Settings | REG_SZ | Sunucu adresi, kullanıcı adı, hedef klasör, zaman aşımı, klasör kimliği ve TLS/CA seçenekleri. Parola içermez. |
+| Settings | REG_SZ | Sunucu adresi, kullanıcı adı, hedef klasör, zaman aşımı, klasör kimliği, TLS/CA seçenekleri ve şifreli parola kaydının bağlantı eşleşmesi. Parola içermez. |
 | Documents | REG_MULTI_SZ | Belge numaraları. |
 | Password | REG_BINARY | Windows DPAPI ile geçerli kullanıcı hesabına bağlı şifrelenmiş parola. |
 
 Belge listesi değişiklikleri kısa bir gecikmeyle otomatik kaydedilir. Ayarlar Kaydet, Bağlantıyı test et ve indirme başlatılırken kaydedilir; geçerli ve değiştirilmiş ayarlar normal kapanışta da saklanır. Kayıt hataları görünür kalır. Okunamamış fakat değiştirilmemiş belge listesi, ayar kaydında veya kapanışta boş listeyle değiştirilmez.
 
-Parolayı hatırla seçeneğini kapatıp kaydederseniz saklanan parola silinir. Hatırlama açıkken parola alanını boş bırakmak eski şifreli kaydı korur; parolayı kaldırmak için seçeneği kapatın. Kayıt defterine düz metin parola veya Base64 yazılmaz. DPAPI bir erişim izni sistemi değildir: sizin Windows oturumunuzdaki uygulamalara karşı ayrı bir güvenlik sınırı oluşturmaz. Şifreli değeri başka bir bilgisayara/kullanıcıya taşımak genellikle işe yaramaz; o ortamda parolayı yeniden girin.
+Parolayı hatırla seçeneğini kapatıp kaydederseniz saklanan parola silinir. Hatırlama açıkken parola alanını boş bırakmak eski şifreli kaydı korur; parolayı kaldırmak için seçeneği kapatın. Kayıtlı parola yalnızca ilişkili sunucu ve kullanıcıyla kullanılabilir. Sunucu/kullanıcı değişirse, yapılandırma bozulursa veya parola yazımı yarıda kalırsa parola yeniden istenir; şifreli kayıt silinmez. Eski kayıt biçimi okunmaya devam eder; yeni kayıtlarda bağlantı bilgileri ve şifreli verinin SHA256 değeri ek metadata olarak tutulur. Bu değer düz metin parolanın özeti değildir. Kayıt defterine düz metin parola veya Base64 yazılmaz. DPAPI bir erişim izni sistemi değildir: sizin Windows oturumunuzdaki uygulamalara karşı ayrı bir güvenlik sınırı oluşturmaz. Şifreli değeri başka bir bilgisayara/kullanıcıya taşımak genellikle işe yaramaz; o ortamda parolayı yeniden girin.
 
 Windows dışında uygulama test/geliştirme amacıyla açılabilir; kayıt defteri yerine açıkça belirtilen geçici oturum modu kullanılır. Bu modda ayarlar diske kaydedilmez.
 
@@ -135,7 +135,7 @@ Windows dışında uygulama test/geliştirme amacıyla açılabilir; kayıt deft
 ### Programatik kullanım
 
 ```python
-from OTClient import OTConnector
+from otClient import OTConnector
 
 with OTConnector(
     base_url="https://OT.kurumunuz.com",
@@ -159,7 +159,7 @@ with OTConnector(
 
 ## Kurumsal ağ ve çevrimdışı kurulum
 
-Uygulamanın web arayüzü veya yerel sunucu bileşeni yoktur. Belge aramak ve indirmek için OT sunucusuna erişmek gerekir; kayıtlı liste ve ayarlar internet olmadan açılabilir. Mevcut requests proxy davranışı geçerlidir; ayrıca NTLM/SSO entegrasyonu eklenmemiştir. Orijinal istemcideki form tabanlı OT girişi kullanılır.
+Uygulamanın web arayüzü veya yerel sunucu bileşeni yoktur. Belge aramak ve indirmek için OT sunucusuna erişmek gerekir; kayıtlı liste ve ayarlar internet olmadan açılabilir. Mevcut requests proxy ve CA ortam değişkeni davranışı geçerlidir; `.netrc` üzerinden otomatik HTTP Basic kimlik bilgisi gönderilmez; ayrıca NTLM/SSO entegrasyonu eklenmemiştir. Orijinal istemcideki form tabanlı OT girişi kullanılır.
 
 İnternete erişebilen, hedef bilgisayarla uyumlu bir Windows/Python ortamında:
 
@@ -178,14 +178,15 @@ Ardından `Baslat.cmd` çalıştırılabilir. Kurumunuzun paket deposu varsa onu
 
 ## Doğrulama
 
-Teslim edilen test takımında **169 test çalıştırıldı: 168 geçti, 1 test atlandı**.
+5 Kasım 2026 incelemesinde **187 test çalıştırıldı: 186 geçti, 1 test atlandı**. Testler macOS üzerinde Python 3.11.15, requests 2.34.2 ve gerçek Tk 9.0.4 pencereleriyle çalıştırıldı.
 
-- İstemci: sahte taşıyıcı senaryoları ve gerçek yerel HTTP sunucusuyla oturum çerezi, yanlış parola, kesilmiş yanıt, hata medyası ve dosya koruma kontrolleri.
-- Kalıcılık: kayıt defteri sınırında sahte yerel hizmetlerle okuma/yazma, bozulma, hatırlamayı kapatma ve kuyruk koruma kontrolleri; ctypes imzaları/bellek temizliği.
-- Belge girdisi: ayrıştırma, tırnaklar, Türkçe/Unicode, dosya kodlamaları, tekrarlar, sınırlar ve güvenli dışa aktarım.
-- Gerçek Tk penceresi: seçim, silme, geri alma, filtre, bağlantı/test akışı, tüm işin arka planda tamamlanması, durdurma/kapanış olayları, küçük ekran, ayar ve toplu giriş pencereleri.
+- Gerçek yerel HTTP sunucusu ve sahte taşıyıcı testleri: giriş, çerez, iptal, kesilmiş/yanlış kodlanmış yanıt ve mevcut dosyanın korunması.
+- Kayıt defteri/DPAPI sınır testleri: bozuk kayıt, kısmi yazma, bağlantı kimliği ile parola eşleşmesi ve kuyruk koruma.
+- Gerçek Tk testleri: belge ekleme, seçim, filtre, silme/geri alma, indirme, kapanış, ayarlar ve modal pencereler.
+- İçe/dışa aktarım, CSV formül koruması ve rapor yazma hatasında eski dosyanın korunması.
+- Python 3.10 sözdizimi/derleme ve Ruff `E9,F` kontrolleri geçti. Bağımlılık denetimi bilinen açık bildirmedi.
 
-Testler Linux üzerinde gerçek Tk penceresiyle çalıştırıldı. Atlanan tek test, **gerçek Windows kullanıcısının DPAPI turunu** gerektirir. Windows kayıt defteri/DPAPI gerçek çalıştırması, CMD dosyalarının Windows üzerinde yürütülmesi ve kurumunuzun gerçek OT bağlantısı burada denenemedi. Ekran görüntüleri gerçek uygulama pencerelerinden alınmıştır; görünen belge numaraları/sonuçları örnek veridir.
+Atlanan test gerçek Windows kullanıcısının DPAPI turunu gerektirir. Windows kayıt defteri, CMD yürütme ve canlı kurum OT bağlantısı bu ortamda doğrulanmadı. Ayrıntılar: [doğrulama kaydı](docs/validation.md) ve [inceleme raporu](docs/review-2026-11-05.md).
 
 Windows üzerinde testleri çalıştırmak için:
 
@@ -197,12 +198,11 @@ Testler gerçek OT hesabına bağlanmaz. Açılan test pencereleri otomatik kapa
 
 ## Dosya yapısı
 
-- `OT_desktop.pyw`: masaüstü giriş noktası.
-- `OTClient.py`: arayüzden bağımsız HTTP istemcisi.
-- `OT_app/`: ayarlar, Windows parola koruma, liste yönetimi, arka plan işi ve UI bileşenleri.
+- `ot_desktop.pyw`: masaüstü giriş noktası.
+- `otClient.py`: arayüzden bağımsız HTTP istemcisi.
+- `ot_app/`: ayarlar, Windows parola koruma, liste yönetimi, arka plan işi ve UI bileşenleri.
 - `tests/`: otomatik testler.
 - `docs/`: tasarım/uygulama notları ve doğrulama özeti.
-- `previews/`: örnek verilerle alınmış gerçek pencere görüntüleri.
 - `Kurulum.cmd`, `Baslat.cmd`, `requirements.txt`: Windows kurulumu ve açılış.
 
 ## Başvuru

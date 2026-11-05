@@ -23,12 +23,12 @@ if __name__ == "__main__":
         startup_error("Python 3.10 veya üzeri gerekiyor. Python 3.11+ kurduktan sonra Kurulum.cmd dosyasını çalıştırın.")
         sys.exit(1)
     try:
-        from OT_app.app import main
+        from ot_app.app import main
     except ImportError as error:
         startup_error("Gerekli bir Python bileşeni bulunamadı. Önce Kurulum.cmd dosyasını çalıştırın.\n\n" + str(error))
         sys.exit(1)
     try:
         main()
     except Exception as error:
-        startup_error("Uygulama başlatılamadı. Dosyaların aynı klasörde ve Python kurulumunun eksiksiz olduğundan emin olun.\n\n" + str(error))
+        startup_error("Uygulama başlatılamadı. Dosyaların aynı klasörde ve Python kurulumunun eksiksiz olduğundan emin olun.\n\nHata türü: " + type(error).__name__)
         sys.exit(1)

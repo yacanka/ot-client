@@ -1,7 +1,7 @@
 # OT Desktop design
 
 ## Goal
-Turn the attached OTClient.py into a lightweight Windows desktop application for entering a document-number list and downloading corporate OT documents. All runtime configuration is editable from the UI and retained per Windows user. The user authorized implementation and targeted client improvements.
+Turn the attached otClient.py into a lightweight Windows desktop application for entering a document-number list and downloading corporate OT documents. All runtime configuration is editable from the UI and retained per Windows user. The user authorized implementation and targeted client improvements.
 
 ## UX
 A corporate light interface with a compact navy sidebar, generous spacing and Turkish labels. Two views: Belgeler and Bağlantı / Ayarlar. The main view contains a document-number field with Enter-to-add, a bulk paste dialog, TXT/CSV import, multi-select remove, undo last removal, list export, filter/search, row status/details, totals, progress, start/selected start and cancellation. Clipboard input accepts newline, tab, comma/semicolon-separated identifiers or a JSON string array. Deduplicate exact trimmed identifiers in insertion order; case variants are distinct.

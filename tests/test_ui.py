@@ -1,9 +1,10 @@
 """Real Tk interactions. Run with a display; no corporate network required."""
 import os
+import sys
 import unittest
 
 
-@unittest.skipUnless(os.name == "nt" or os.environ.get("DISPLAY"), "A graphical display is required")
+@unittest.skipUnless(os.name == "nt" or sys.platform == "darwin" or os.environ.get("DISPLAY"), "A graphical display is required")
 class UserFlowTests(unittest.TestCase):
     def setUp(self):
         from ot_app.app import Application

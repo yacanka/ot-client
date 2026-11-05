@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from OT_app.settings import (
+from ot_app.settings import (
     AppSettings,
     DOCUMENTS_VALUE,
     PASSWORD_VALUE,
@@ -20,7 +20,7 @@ from OT_app.settings import (
     RegistryStore,
     SettingsError,
 )
-from OT_app.win_secrets import DPAPIError, DPAPIProtector, _DataBlob
+from ot_app.win_secrets import DPAPIError, DPAPIProtector, _DataBlob
 
 
 class FakeRegistry:
@@ -119,6 +119,14 @@ class AppSettingsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 AppSettings(output_dir=str(certificate)).validate()
 
+    def test_disabled_tls_does_not_require_retained_ca_file(self):
+        AppSettings(verify_tls=False, ca_bundle="/missing/previous-ca.pem").validate()
+
+    def test_url_control_characters_are_rejected(self):
+        for url in ("\x00https://example.test", "https://example.test/\x01"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                AppSettings(base_url=url).validate()
+
 
 class RegistryStoreTests(unittest.TestCase):
     def setUp(self):
@@ -133,6 +141,36 @@ class RegistryStoreTests(unittest.TestCase):
         self.assertEqual(numbers, [])
         self.assertEqual(self.store.warning, "")
 
+    def test_blank_password_cannot_reuse_saved_secret_with_other_identity(self):
+        for changed in ({"base_url": "https://other.example.test"}, {"username": "other-user"}):
+            with self.subTest(changed=changed):
+                self.store.save(self.settings)
+                self.store.save(replace(self.settings, password="", **changed))
+                restored, _ = self.store.load()
+                self.assertEqual(restored.password, "")
+                self.assertTrue(self.store.warning)
+
+    def test_failed_secret_write_cannot_reuse_old_password_for_new_server(self):
+        self.store.save(self.settings)
+        self.registry.fail_write.add(PASSWORD_VALUE)
+        with self.assertRaises(SettingsError):
+            self.store.save(replace(self.settings, base_url="https://other.example.test", password="synthetic-replacement"))
+        restored, _ = self.store.load()
+        self.assertEqual(restored.password, "")
+        self.assertTrue(self.store.warning)
+
+    def test_legacy_password_is_read_and_upgraded_on_save(self):
+        self.registry.values[SETTINGS_VALUE] = (json.dumps({
+            "base_url": self.settings.base_url, "username": self.settings.username,
+        }), REG_SZ)
+        self.registry.values[PASSWORD_VALUE] = (
+            self.protector.protect(self.settings.password.encode("utf-8")), REG_BINARY)
+        restored, _ = self.store.load()
+        self.assertEqual(restored.password, self.settings.password)
+        self.store.save(restored)
+        self.store.save(replace(restored, base_url="https://other.example.test", password=""))
+        self.assertEqual(self.store.load()[0].password, "")
+
     def test_roundtrip_uses_expected_registry_types_and_no_secret_json(self):
         self.store.save(self.settings, ["001", "Ab", "001", "ab"])
         config, kind = self.registry.values[SETTINGS_VALUE]
@@ -145,6 +183,25 @@ class RegistryStoreTests(unittest.TestCase):
         self.assertEqual(restored, self.settings)
         self.assertEqual(documents, ["001", "Ab", "ab"])
         self.assertEqual(self.store.warning, "")
+
+    def test_disabled_tls_preserves_retained_missing_ca_path_on_load(self):
+        settings = replace(self.settings, verify_tls=False, ca_bundle="/missing/previous-ca.pem")
+        self.store.save(settings)
+        restored, _ = self.store.load()
+        self.assertEqual(restored.ca_bundle, settings.ca_bundle)
+        self.assertFalse(restored.verify_tls)
+        self.assertEqual(self.store.warning, "")
+
+    def test_legacy_blank_save_keeps_secret_bound_to_original_identity(self):
+        self.registry.values[SETTINGS_VALUE] = (json.dumps({
+            "base_url": self.settings.base_url, "username": self.settings.username,
+        }), REG_SZ)
+        protected = self.protector.protect(self.settings.password.encode("utf-8"))
+        self.registry.values[PASSWORD_VALUE] = (protected, REG_BINARY)
+        self.store.save(replace(self.settings, base_url="https://other.example.test", password=""))
+        restored, _ = self.store.load()
+        self.assertEqual(restored.password, "")
+        self.assertEqual(self.registry.values[PASSWORD_VALUE], (protected, REG_BINARY))
 
     def test_remember_false_deletes_secret_only_on_explicit_save(self):
         self.store.save(self.settings, ["old"])
@@ -211,12 +268,14 @@ class RegistryStoreTests(unittest.TestCase):
         self.store.save(self.settings, None)
         self.assertEqual(self.store.warning, warning)
 
-    def test_corrupt_json_does_not_hide_documents_or_decryptable_secret(self):
+    def test_corrupt_config_preserves_documents_and_ciphertext_without_using_unbound_secret(self):
         self.store.save(self.settings, ["001"])
+        protected = self.registry.values[PASSWORD_VALUE]
         self.registry.values[SETTINGS_VALUE] = ("{bad", REG_SZ)
         restored, documents = self.store.load()
         self.assertEqual(restored.base_url, "")
-        self.assertEqual(restored.password, self.settings.password)
+        self.assertEqual(restored.password, "")
+        self.assertEqual(self.registry.values[PASSWORD_VALUE], protected)
         self.assertEqual(documents, ["001"])
         self.assertTrue(self.store.warning)
 
@@ -409,7 +468,7 @@ class DPAPIBoundaryTests(unittest.TestCase):
 
     def test_native_failure_frees_any_returned_buffer_and_hides_input(self):
         self.success = False
-        with patch("OT_app.win_secrets.ctypes.get_last_error", return_value=5, create=True):
+        with patch("ot_app.win_secrets.ctypes.get_last_error", return_value=5, create=True):
             with self.assertRaises(DPAPIError) as caught:
                 self.protector.protect(b"must-never-appear")
         self.assertNotIn("must-never-appear", str(caught.exception))

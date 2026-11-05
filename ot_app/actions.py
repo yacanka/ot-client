@@ -1,10 +1,10 @@
 """User-initiated document list actions, kept separate from the Tk shell."""
-import csv
+from itertools import chain
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 from .dialogs import BulkInputDialog, CandidateDialog
-from .documents import merge_document_numbers, parse_document_text, read_document_file, write_document_file
+from .documents import merge_document_numbers, parse_document_text, read_document_file, write_csv_report, write_document_file
 from .queue_model import QueueRow
 from .views import STATUS_LABELS
 
@@ -154,18 +154,16 @@ class DocumentActions:
                                             filetypes=[("CSV (Excel)", "*.csv")])
         if not path:
             return
-        def safe(value):
-            text = str(value or "")
-            return "'" + text if text.lstrip().startswith(("=", "+", "-", "@", "\t", "\r")) else text
         try:
-            with open(path, "w", encoding="utf-8-sig", newline="") as file:
-                writer = csv.writer(file, delimiter=";")
-                writer.writerow(["Belge numarası", "Belge adı", "Durum", "Açıklama", "Dosya"])
-                for row in rows:
-                    writer.writerow([safe(row.number), safe(row.document.title if row.document else ""),
-                                     STATUS_LABELS.get(row.status, row.status), safe(row.message), safe(row.path)])
+            header = ["Belge numarası", "Belge adı", "Durum", "Açıklama", "Dosya"]
+            values = (
+                [row.number, row.document.title if row.document else "",
+                 STATUS_LABELS.get(row.status, row.status), row.message, row.path]
+                for row in rows
+            )
+            write_csv_report(path, chain([header], values))
             self.set_notice(f"İşlem raporu kaydedildi: {Path(path).name}")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             messagebox.showerror("Rapor kaydedilemedi", str(exc), parent=self)
 
     def choose_candidate(self):

@@ -18,12 +18,22 @@ from typing import Callable, Iterable
 from otClient import (
     Document,
     DownloadCancelled,
-    otConnector,
-    otError,
+    OTConnector,
+    OTError,
     safe_windows_filename,
 )
 
 from .settings import AppSettings
+
+
+def safe_error_message(error: Exception, password: str = "") -> str:
+    """Expose only sanitized client errors; arbitrary exceptions may hold secrets."""
+    if isinstance(error, OTError):
+        message = str(error).strip() or "OT işlemi tamamlanamadı."
+        return message.replace(password, "[gizlendi]") if password else message
+    if isinstance(error, OSError):
+        return "Dosya veya bağlantı işlemi tamamlanamadı. Erişim izinlerini ve bağlantıyı kontrol edin."
+    return f"Beklenmeyen {type(error).__name__} hatası. İşlem tamamlanamadı."
 
 
 @dataclass(frozen=True)
@@ -119,7 +129,7 @@ class DownloadWorker(threading.Thread):
         events: queue.Queue,
         cancel: threading.Event,
         force: bool = False,
-        connector_factory=otConnector,
+        connector_factory=OTConnector,
     ) -> None:
         super().__init__(name="ot-download-worker", daemon=True)
         self._settings = replace(settings)
@@ -135,15 +145,8 @@ class DownloadWorker(threading.Thread):
     def _status(self, item: JobItem, status: str, message: str, **details: object) -> None:
         self._emit("status", item.key, status=status, message=message, **details)
 
-    def _message(self, error: Exception, *, unexpected: bool = False) -> str:
-        message = str(error).strip() or type(error).__name__
-        if unexpected:
-            message = f"Beklenmeyen {type(error).__name__} hatası: {message}"
-        # Client errors are already sanitized. Keep an injected connector or an
-        # unexpected exception from disclosing the configured password in the UI.
-        if isinstance(self._settings.password, str) and self._settings.password:
-            message = message.replace(self._settings.password, "[gizlendi]")
-        return message
+    def _message(self, error: Exception) -> str:
+        return safe_error_message(error, self._settings.password)
 
     def _check_cancelled(self) -> None:
         if self._cancel.is_set():
@@ -179,7 +182,7 @@ class DownloadWorker(threading.Thread):
         document_id = str(selected.id)
         owner = filenames.get(normalized)
         if owner is not None and owner != document_id:
-            raise otError(
+            raise OTError(
                 f"Farklı belgeler aynı dosya adını kullanıyor: {target_name}. "
                 "Önceki dosya korundu. Bu belgeyi ayrı bir hedef klasöre indirin."
             )
@@ -235,21 +238,20 @@ class DownloadWorker(threading.Thread):
             try:
                 self._settings.validate(require_connection=True)
             except ValueError as error:
-                raise otError(f"Bağlantı ayarlarını kontrol edin: {error}") from error
+                raise OTError(f"Bağlantı ayarlarını kontrol edin: {error}") from error
             self._check_cancelled()
             self._emit("session", state="connecting")
-            verify = (self._settings.ca_bundle or True) if self._settings.verify_tls else False
             connector = self._connector_factory(
                 self._settings.base_url,
                 username=self._settings.username,
                 password=self._settings.password,
                 timeout=self._settings.timeout,
-                verify=verify,
+                verify=self._settings.tls_verify,
                 folder_id=self._settings.folder_id,
             )
             self._check_cancelled()
             if connector.login() is not True:
-                raise otError("Oturum doğrulanamadı. Bağlantı ayarlarını kontrol edin.")
+                raise OTError("Oturum doğrulanamadı. Bağlantı ayarlarını kontrol edin.")
             self._check_cancelled()
             self._emit("session", state="connected")
             for item in self._items:
@@ -261,10 +263,10 @@ class DownloadWorker(threading.Thread):
                     processed += 1
                     self._emit("advance", done=processed, total=total)
                     raise
-                except (otError, OSError) as error:
+                except (OTError, OSError) as error:
                     self._status(item, "error", self._message(error))
                 except Exception as error:
-                    self._status(item, "error", self._message(error, unexpected=True))
+                    self._status(item, "error", self._message(error))
                     processed += 1
                     self._emit("advance", done=processed, total=total)
                     raise
@@ -277,9 +279,7 @@ class DownloadWorker(threading.Thread):
             fatal_reported = True
             self._emit(
                 "fatal",
-                message=self._message(
-                    error, unexpected=not isinstance(error, (otError, OSError))
-                ),
+                message=self._message(error),
             )
         finally:
             try:
@@ -290,7 +290,7 @@ class DownloadWorker(threading.Thread):
                     self._emit(
                         "fatal",
                         message="Bağlantı kapatılırken hata oluştu: "
-                        + self._message(error, unexpected=True),
+                        + self._message(error),
                     )
             finally:
                 self._emit(

@@ -3,6 +3,7 @@
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -12,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import requests
 
-from OTClient import (
+from otClient import (
     Document,
     DownloadCancelled,
     OTConnector,
@@ -97,7 +98,7 @@ def entry(document_id="090001", name="POL.001", title="A title", authors=None):
 class ClientTestCase(unittest.TestCase):
     def setUp(self):
         self.session = FakeSession()
-        self.patch_session = patch("OTClient.requests.Session", return_value=self.session)
+        self.patch_session = patch("otClient.requests.Session", return_value=self.session)
         self.patch_session.start()
         self.addCleanup(self.patch_session.stop)
         self.client = OTConnector(
@@ -111,10 +112,10 @@ class ClientTests(ClientTestCase):
         self.assertEqual(self.session.calls, [])
 
     def test_invalid_connection_settings_are_rejected(self):
-        for url in ("", "ftp://host", "https://", "https://user:secret@host", "https://host/?x=1"):
+        for url in ("", "ftp://host", "https://", "https://user:secret@host", "https://host/?x=1", "https://host/?", "https://host/#", "\x00https://host", "https://host/\x01"):
             with self.subTest(url=url), self.assertRaises(OTError):
                 OTConnector(url)
-        for timeout in (0, -1, True, float("nan"), float("inf"), "30"):
+        for timeout in (0, -1, True, float("nan"), float("inf"), "30", 10 ** 1000):
             with self.subTest(timeout=timeout), self.assertRaises(OTError):
                 OTConnector("https://host", timeout=timeout)
 
@@ -294,12 +295,37 @@ class ClientTests(ClientTestCase):
         self.assertTrue(self.session.closed)
 
 
+class CredentialIsolationTests(unittest.TestCase):
+    def test_session_does_not_send_implicit_netrc_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            netrc = Path(directory) / "netrc"
+            netrc.write_text("default login synthetic-user password synthetic-value\n")
+            with patch.dict(os.environ, {"NETRC": str(netrc)}):
+                with OTConnector("https://example.test") as connector:
+                    request = connector.client.session.prepare_request(
+                        requests.Request("GET", "https://example.test/TDS/")
+                    )
+                    self.assertNotIn("Authorization", request.headers)
+
+    def test_proxy_and_ca_environment_remain_supported(self):
+        with patch.dict(os.environ, {
+            "HTTPS_PROXY": "http://proxy.example.test:8080",
+            "REQUESTS_CA_BUNDLE": "/synthetic/ca.pem", "NO_PROXY": "",
+        }, clear=True):
+            with OTConnector("https://example.test") as connector:
+                options = connector.client.session.merge_environment_settings(
+                    "https://example.test", {}, False, True, None
+                )
+                self.assertEqual(options["proxies"]["https"], "http://proxy.example.test:8080")
+                self.assertEqual(options["verify"], "/synthetic/ca.pem")
+
+
 class DownloadTests(ClientTestCase):
     def setUp(self):
         super().setUp()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.folder = Path(temporary.name)
+        self.folder = Path(temporary.name).resolve()
 
     def response(self, chunks, *, mime="application/pdf", filename=None, length=None):
         headers = {"Content-Type": mime}
@@ -310,6 +336,18 @@ class DownloadTests(ClientTestCase):
         response = FakeResponse(headers=headers, chunks=chunks)
         self.session.responses = [response]
         return response
+
+    def test_utf16_login_page_cannot_replace_existing_document(self):
+        target = self.folder / "report.pdf"
+        target.write_bytes(b"existing document")
+        body = '<html><form><input type="password"></form></html>'
+        for encoding in ("utf-16", "utf-32"):
+            with self.subTest(encoding=encoding):
+                self.response([body.encode(encoding)], mime="application/octet-stream")
+                with self.assertRaises(OTError):
+                    self.client.download_document("1", self.folder, target.name)
+                self.assertEqual(target.read_bytes(), b"existing document")
+                self.assertEqual(list(self.folder.iterdir()), [target])
 
     def test_streams_bytes_preserves_pdf_extension_and_reports_progress(self):
         response = self.response([b"abc", b"", b"def"], length=6)
@@ -397,7 +435,7 @@ class DownloadTests(ClientTestCase):
         target = self.folder / "Report.pdf"
         target.write_bytes(b"old")
         self.response([b"new"])
-        with patch("OTClient.os.replace", side_effect=PermissionError("private-test-password")):
+        with patch("otClient.os.replace", side_effect=PermissionError("private-test-password")):
             with self.assertRaises(OTError):
                 self.client.download_document("1", self.folder, target.name)
         self.assertEqual(target.read_bytes(), b"old")
@@ -585,7 +623,7 @@ class DownloadTests(ClientTestCase):
         response = self.response([b"x"] * 1000, length=10)
         response.headers["Content-Encoding"] = "gzip"
         progress = []
-        with patch("OTClient.time.monotonic", return_value=1.0):
+        with patch("otClient.time.monotonic", return_value=1.0):
             result = self.client.download_document("1", self.folder, "Report.pdf", progress=lambda done, total: progress.append((done, total)))
         self.assertEqual(result.bytes_written, 1000)
         self.assertLessEqual(len(progress), 3)

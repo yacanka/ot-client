@@ -7,6 +7,8 @@ JSON when the file will later be imported and every identifier must roundtrip.
 from __future__ import annotations
 
 import codecs
+import csv
+import io
 import json
 import os
 import tempfile
@@ -207,6 +209,26 @@ def write_document_file(path: str | os.PathLike[str], numbers: Iterable[str]) ->
     data = text.encode(encoding)
     if len(data) > MAX_FILE_BYTES:
         raise DocumentInputError("Dışa aktarılacak dosya boyutu sınırını aşıyor (10 MiB).")
+    _atomic_write(file_path, data)
+
+
+def write_csv_report(path: str | os.PathLike[str], rows: Iterable[Iterable[object]]) -> None:
+    """Atomically write a BOM-prefixed report with spreadsheet-safe cells."""
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, delimiter=";")
+    for row in rows:
+        cells = []
+        for value in row:
+            text = "" if value is None else str(value)
+            if text.lstrip().startswith(("=", "+", "-", "@")):
+                text = "'" + text
+            cells.append(text)
+        writer.writerow(cells)
+    _atomic_write(Path(path), output.getvalue().encode("utf-8-sig"))
+
+
+def _atomic_write(file_path: Path, data: bytes) -> None:
+    """Keep the destination intact until a complete export is flushed to disk."""
     temporary_path: str | None = None
     try:
         descriptor, temporary_path = tempfile.mkstemp(prefix=f".{file_path.name}.", suffix=".tmp", dir=file_path.parent)
