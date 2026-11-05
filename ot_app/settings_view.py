@@ -9,6 +9,9 @@ from tkinter import filedialog, ttk
 from tkinter import font as tkfont
 from typing import Callable
 
+from otClient import Document, safe_windows_filename
+
+from .filename_format import format_document_filename, validate_filename_format
 from .settings import AppSettings
 
 
@@ -41,6 +44,8 @@ class SettingsView(ttk.Frame):
         self.username_var = tk.StringVar(self, value=settings.username)
         self.password_var = tk.StringVar(self, value=settings.password)
         self.output_dir_var = tk.StringVar(self, value=settings.output_dir)
+        self.filename_format_var = tk.StringVar(self, value=settings.filename_format)
+        self.filename_preview_var = tk.StringVar(self)
         timeout = settings.timeout
         timeout_text = str(int(timeout)) if float(timeout).is_integer() else str(timeout)
         self.timeout_var = tk.StringVar(self, value=timeout_text)
@@ -70,6 +75,7 @@ class SettingsView(ttk.Frame):
             self.username_var,
             self.password_var,
             self.output_dir_var,
+            self.filename_format_var,
             self.timeout_var,
             self.folder_id_var,
             self.ca_bundle_var,
@@ -77,6 +83,7 @@ class SettingsView(ttk.Frame):
             self.remember_password_var,
         ):
             variable.trace_add("write", self._on_settings_changed)
+        self.filename_format_var.trace_add("write", self._update_filename_preview)
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self)
@@ -97,6 +104,7 @@ class SettingsView(ttk.Frame):
         style.configure("SettingsStatus.TLabel", foreground="#627189")
         style.configure("SettingsSuccess.TLabel", foreground="#18794E")
         style.configure("SettingsError.TLabel", foreground="#B42336")
+        style.configure("SettingsFormatError.TLabel", background="#FFFFFF", foreground="#B42336")
 
     def _build_header(self) -> None:
         header = ttk.Frame(self, padding=(0, 0, 0, 17))
@@ -233,6 +241,61 @@ class SettingsView(ttk.Frame):
         )
         browse.grid(row=0, column=1, padx=(9, 0))
         self._editable.append(browse)
+        self._build_filename_fields(card)
+
+    def _build_filename_fields(self, card: ttk.Frame) -> None:
+        field = ttk.Frame(card, style="Card.TFrame")
+        field.grid(row=3, column=0, sticky="ew", pady=(17, 0))
+        field.columnconfigure(0, weight=1)
+        self._field_label(field, "İndirilen dosyanın adı")
+        self.filename_format_entry = self._entry(field, self.filename_format_var, width=12)
+        tags = ttk.Frame(field, style="Card.TFrame")
+        tags.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.filename_tag_buttons = {}
+        for column, (tag, label) in enumerate((
+            ("numara", "Belge numarası"), ("ad", "Belge adı"), ("revizyon", "Revizyon"),
+        )):
+            button = ttk.Button(
+                tags, text=label, style="Subtle.TButton",
+                command=lambda name=tag: self._insert_filename_tag(name),
+            )
+            button.grid(row=0, column=column, padx=(0, 6))
+            self.filename_tag_buttons[tag] = button
+            self._editable.append(button)
+        self._filename_hint = ttk.Label(
+            field, text="Etiket eklemek için düğmelere tıklayın: {numara}, {ad}, {revizyon}. "
+            "Dosya uzantısı otomatik eklenir.",
+            style="CardMuted.TLabel", wraplength=580, justify="left",
+        )
+        self._filename_hint.grid(row=3, column=0, sticky="ew", pady=(7, 0))
+        self._filename_preview = ttk.Label(
+            field, textvariable=self.filename_preview_var, style="CardMuted.TLabel",
+            wraplength=580, justify="left",
+        )
+        self._filename_preview.grid(row=4, column=0, sticky="ew", pady=(7, 0))
+        self._update_filename_preview()
+
+    def _insert_filename_tag(self, name: str) -> None:
+        if self._busy:
+            return
+        entry = self.filename_format_entry
+        if entry.selection_present():
+            start = entry.index(tk.SEL_FIRST)
+            entry.delete(tk.SEL_FIRST, tk.SEL_LAST)
+            entry.icursor(start)
+        entry.insert(tk.INSERT, "{" + name + "}")
+        entry.focus_set()
+
+    def _update_filename_preview(self, *_: object) -> None:
+        sample = Document("preview", "PR-001.pdf", "Kalite Prosedürü", "", 3)
+        try:
+            name = format_document_filename(self.filename_format_var.get(), sample)
+        except ValueError as error:
+            self.filename_preview_var.set(str(error))
+            self._filename_preview.configure(style="SettingsFormatError.TLabel")
+        else:
+            self.filename_preview_var.set("Örnek: " + safe_windows_filename(name, sample.id))
+            self._filename_preview.configure(style="CardMuted.TLabel")
 
     def _build_advanced_card(self) -> None:
         card = self._card(2)
@@ -329,7 +392,15 @@ class SettingsView(ttk.Frame):
         self.save_button.grid(row=0, column=1)
 
     def read_settings(self) -> AppSettings:
-        """Return form values; reject invalid timeouts without echoing secrets."""
+        """Return form values; reject invalid timeout/filename inputs locally."""
+        filename_format = self.filename_format_var.get()
+        try:
+            validate_filename_format(filename_format)
+        except ValueError as error:
+            self.set_connection_status(str(error), success=False)
+            self.filename_format_entry.focus_set()
+            self._queue_reveal(self.filename_format_entry)
+            raise
         timeout_text = self.timeout_var.get().strip().replace(",", ".")
         try:
             timeout = float(timeout_text)
@@ -350,6 +421,7 @@ class SettingsView(ttk.Frame):
             username=self.username_var.get().strip(),
             password=self.password_var.get(),
             output_dir=self.output_dir_var.get().strip(),
+            filename_format=filename_format.strip(),
             timeout=numeric_timeout,
             folder_id=self.folder_id_var.get().strip(),
             ca_bundle=self.ca_bundle_var.get().strip(),
@@ -464,6 +536,8 @@ class SettingsView(ttk.Frame):
         self._status_label.configure(wraplength=width)
         self._ca_hint.configure(wraplength=max(140, width - 55))
         self._tls_hint.configure(wraplength=max(140, width - 55))
+        self._filename_hint.configure(wraplength=max(140, width - 55))
+        self._filename_preview.configure(wraplength=max(140, width - 55))
 
     def _bind_scroll_widgets(self, widget: tk.Misc) -> None:
         widget.bind("<MouseWheel>", self._on_mousewheel, add="+")

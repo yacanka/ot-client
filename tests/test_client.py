@@ -474,6 +474,35 @@ class DownloadTests(ClientTestCase):
         result = self.client.download_document("1", self.folder, "Report.pdf")
         self.assertEqual(result.path.name, "Report.pdf")
 
+    def test_custom_name_uses_source_or_response_extension(self):
+        for source, name, mime, expected in (
+            ("DOC-01", "Plan.doc", "application/pdf", "Plan.doc.pdf"),
+            ("DOC-02.pdf", "Other.doc.pdf", "application/msword", "Other.doc.pdf"),
+            ("DOC-03", "Risk.json", "application/pdf", "Risk.json.pdf"),
+        ):
+            with self.subTest(source=source):
+                self.response([b"%PDF-document"], mime=mime)
+                result = self.client.download_document(source, self.folder, name, source_name=source)
+                self.assertEqual(result.path.name, expected)
+                self.assertEqual(result.path.read_bytes(), b"%PDF-document")
+
+    def test_custom_json_or_html_name_cannot_authorize_a_service_response(self):
+        for name, mime, content in (
+            ("Configuration.json", "application/json", b'{"error":"unauthorized"}'),
+            ("Page.html", "text/html", b"<html>Service reply</html>"),
+        ):
+            with self.subTest(name=name):
+                self.response([content], mime=mime)
+                with self.assertRaises(OTError):
+                    self.client.download_document("1", self.folder, name, source_name="DOC-01")
+                self.assertEqual(list(self.folder.iterdir()), [])
+
+    def test_renamed_real_json_document_retains_source_type_evidence(self):
+        self.response([b'{"document":"policy"}'], mime="application/json")
+        result = self.client.download_document("1", self.folder, "New name.json", source_name="policy.json")
+        self.assertEqual(result.path.name, "New name.json")
+        self.assertEqual(result.path.read_bytes(), b'{"document":"policy"}')
+
     def test_unknown_type_uses_binary_extension_and_id_fallback(self):
         self.response([b"unknown"], mime="application/octet-stream")
         result = self.client.download_document("090001", self.folder)

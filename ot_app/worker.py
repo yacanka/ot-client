@@ -23,6 +23,7 @@ from otClient import (
     safe_windows_filename,
 )
 
+from .filename_format import DEFAULT_FILENAME_FORMAT, format_document_filename
 from .settings import AppSettings
 
 
@@ -177,7 +178,9 @@ class DownloadWorker(threading.Thread):
                 return
 
         self._check_cancelled()
-        target_name = safe_windows_filename(selected.name, selected.id)
+        file_name = format_document_filename(self._settings.filename_format, selected)
+        source_name = selected.name if self._settings.filename_format.strip() != DEFAULT_FILENAME_FORMAT else None
+        target_name = safe_windows_filename(file_name, selected.id)
         normalized = target_name.casefold()
         document_id = str(selected.id)
         owner = filenames.get(normalized)
@@ -199,7 +202,8 @@ class DownloadWorker(threading.Thread):
             result = connector.download_document(
                 selected.id,
                 self._settings.output_dir,
-                file_name=selected.name,
+                file_name=file_name,
+                source_name=source_name,
                 overwrite=self._force,
                 cancel_event=self._cancel,
                 progress=progress,

@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .documents import MAX_DOCUMENTS, MAX_INPUT_CHARACTERS, merge_document_numbers
+from .filename_format import DEFAULT_FILENAME_FORMAT, validate_filename_format
 from .win_secrets import DPAPIProtector, MAX_SECRET_BYTES
 
 REGISTRY_PATH = r"Software\OTDesktop"
@@ -48,6 +49,7 @@ class AppSettings:
     ca_bundle: str = ""
     verify_tls: bool = True
     remember_password: bool = True
+    filename_format: str = DEFAULT_FILENAME_FORMAT
 
     @property
     def tls_verify(self) -> bool | str:
@@ -105,6 +107,7 @@ class AppSettings:
                 raise ValueError("Sunucu adresi geçerli bir HTTP/HTTPS adresi olmalı; kullanıcı bilgisi, sorgu veya # içermemelidir.")
         if not self.output_dir.strip():
             raise ValueError("İndirme klasörünü seçin.")
+        validate_filename_format(self.filename_format)
         try:
             output_path = Path(self.output_dir).expanduser()
             if output_path.exists() and not output_path.is_dir():

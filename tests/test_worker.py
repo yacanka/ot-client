@@ -77,12 +77,14 @@ class FakeConnector:
         *,
         cancel_event=None,
         progress=None,
+        source_name=None,
     ):
         self.downloads.append(
             {
                 "id": identifier,
                 "folder_path": folder_path,
                 "file_name": file_name,
+                "source_name": source_name,
                 "overwrite": overwrite,
                 "cancel_event": cancel_event,
             }
@@ -371,6 +373,36 @@ class DownloadWorkerTests(unittest.TestCase):
         self.assertEqual(self.statuses(events, "2"), ["error"])
         self.assertEqual((Path(self.temporary.name) / "Same.pdf").read_bytes(), b"document 1")
         self.assertEqual(self.finished(events)["processed"], 2)
+
+    def test_filename_format_applies_to_searched_and_explicit_documents(self):
+        self.settings.filename_format = "{numara} - {ad} - Rev{revizyon}"
+        first = Document("1", "PR-001.pdf", "Kalite Prosedürü", "", 4)
+        second = Document("2", "PR-002.pdf", "İş Akışı", "", 0)
+        self.client.results["PR-001"] = [first]
+        self.make_worker([JobItem("1", "PR-001"), JobItem("2", "query", second)]).run()
+        self.assertEqual((Path(self.temporary.name) / "PR-001 - Kalite Prosedürü - Rev4.pdf").read_bytes(), b"document 1")
+        self.assertEqual((Path(self.temporary.name) / "PR-002 - İş Akışı - Rev0.pdf").read_bytes(), b"document 2")
+        self.assertEqual([call["source_name"] for call in self.client.downloads], ["PR-001.pdf", "PR-002.pdf"])
+        self.assertFalse(any(event.kind == "fatal" for event in self.collect()))
+
+    def test_formatted_filename_collision_preserves_first_document(self):
+        self.settings.filename_format = "{ad}"
+        items = [
+            JobItem("1", "ABC", Document("1", "ABC.pdf", "Same", "", 1)),
+            JobItem("2", "DEF", Document("2", "DEF.pdf", "same", "", 2)),
+        ]
+        self.make_worker(items, force=True).run()
+        events = self.collect()
+        self.assertEqual((Path(self.temporary.name) / "Same.pdf").read_bytes(), b"document 1")
+        self.assertEqual(self.statuses(events, "2"), ["error"])
+        self.assertEqual(len(self.client.downloads), 1)
+
+    def test_filename_format_is_snapshotted_at_worker_creation(self):
+        self.settings.filename_format = "{numara}_R{revizyon}"
+        worker = self.make_worker([JobItem("1", "ABC", document())])
+        self.settings.filename_format = "{ad}"
+        worker.run()
+        self.assertTrue((Path(self.temporary.name) / "ABC_R0.pdf").is_file())
 
     def test_collision_check_is_case_insensitive_for_windows(self):
         items = [

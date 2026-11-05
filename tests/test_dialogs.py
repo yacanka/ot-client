@@ -143,6 +143,38 @@ class SettingsAndDialogTests(unittest.TestCase):
         self.root.update()
         self.assertAlmostEqual(view._canvas.yview()[0], 0.0)
 
+    def test_filename_format_tags_insert_at_cursor_and_replace_selection(self):
+        view = self._settings_view()
+        view.filename_format_var.set("{numara} - ")
+        view.filename_format_entry.icursor("end")
+        view.filename_tag_buttons["ad"].invoke()
+        self.assertEqual(view.read_settings().filename_format, "{numara} - {ad}")
+        self.assertIn("PR-001 - Kalite Prosedürü.pdf", view.filename_preview_var.get())
+        view.filename_format_entry.selection_range(0, 8)
+        view.filename_tag_buttons["revizyon"].invoke()
+        self.assertEqual(view.read_settings().filename_format, "{revizyon} - {ad}")
+        view.set_busy(True)
+        for button in view.filename_tag_buttons.values():
+            self.assertIn("disabled", button.state())
+        view.filename_tag_buttons["numara"].invoke()
+        self.assertEqual(view.filename_format_var.get(), "{revizyon} - {ad}")
+
+    def test_invalid_filename_format_shows_inline_error_and_can_be_corrected(self):
+        self.root.geometry("780x540")
+        view = self._settings_view()
+        view.filename_format_var.set("{unknown}")
+        self.assertIn("etiket", view.filename_preview_var.get().lower())
+        with self.assertRaises(ValueError):
+            view.read_settings()
+        self.root.update()
+        canvas_top = view._canvas.winfo_rooty()
+        canvas_bottom = canvas_top + view._canvas.winfo_height()
+        self.assertGreaterEqual(view.filename_format_entry.winfo_rooty(), canvas_top)
+        self.assertLessEqual(view.filename_format_entry.winfo_rooty() + view.filename_format_entry.winfo_height(), canvas_bottom)
+        view.filename_format_var.set("{numara} - Rev{revizyon}")
+        self.assertIn("PR-001 - Rev3.pdf", view.filename_preview_var.get())
+        self.assertEqual(view.read_settings().filename_format, "{numara} - Rev{revizyon}")
+
     def test_bulk_accepts_unique_documents_and_return_remains_multiline(self):
         from ot_app.dialogs import BulkInputDialog
 

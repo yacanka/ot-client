@@ -71,6 +71,12 @@ _KNOWN_FILE_EXTENSIONS = frozenset(_MIME_EXTENSIONS.values()) | {
 }
 
 
+def document_file_extension(name: str) -> str:
+    """Recognize file suffixes without treating document numbers as extensions."""
+    extension = PureWindowsPath(name).suffix
+    return extension if extension.lower() in _KNOWN_FILE_EXTENSIONS else ""
+
+
 class OTError(Exception):
     """An actionable OT, transport, response-format or local-file error."""
 
@@ -426,10 +432,20 @@ def _content_disposition_filename(header: str) -> str | None:
     return filename.strip() if isinstance(filename, str) and filename.strip() else None
 
 
-def _download_filename(response: requests.Response, document_id: str, requested: str | None) -> str:
-    disposition = _content_disposition_filename(response.headers.get("Content-Disposition", ""))
+def _download_filename(
+    response: requests.Response, document_id: str, requested: str | None,
+    *, source_name: str | None = None,
+) -> str:
     if requested is not None and not isinstance(requested, str):
         raise OTError("Dosya adı metin olmalıdır.")
+    if source_name is not None:
+        original_name = _download_filename(response, document_id, source_name)
+        extension = PureWindowsPath(original_name).suffix
+        name = requested if requested and requested.strip() else original_name
+        if not name.rstrip(" .").casefold().endswith(extension.casefold()):
+            name += extension
+        return safe_windows_filename(name, document_id)
+    disposition = _content_disposition_filename(response.headers.get("Content-Disposition", ""))
     name = requested if requested and requested.strip() else disposition or document_id
     current_extension = PureWindowsPath(name.rstrip(" .")).suffix
     extension = PureWindowsPath(disposition.rstrip(" .")).suffix if disposition else ""
@@ -735,6 +751,7 @@ class OTConnector:
         *,
         cancel_event: threading.Event | None = None,
         progress: Callable[[int, int | None], None] | None = None,
+        source_name: str | None = None,
     ) -> DownloadResult:
         """Stream, validate, SHA256-compare, and atomically commit one document.
 
@@ -742,6 +759,8 @@ class OTConnector:
         Progress reports received bytes and a decoded total when available, at
         most ten intermediate notifications per second plus start and finish.
         A cancel requested after the atomic replacement cannot undo the commit.
+        When renaming, ``source_name`` retains the original document's extension
+        and media-type evidence; a custom title cannot authorize JSON/HTML data.
         """
         document_id = _document_id(id)
         _check_cancelled(cancel_event)
@@ -758,8 +777,9 @@ class OTConnector:
                 operation="Belge indirme",
             )
             _check_cancelled(cancel_event)
-            filename = _download_filename(response, document_id, file_name)
-            allow_json, allow_html = _validate_media_headers(response, file_name, filename)
+            filename = _download_filename(response, document_id, file_name, source_name=source_name)
+            media_name = source_name if source_name is not None else file_name
+            allow_json, allow_html = _validate_media_headers(response, media_name, filename)
             target = self._target_path(folder, filename, document_id)
             total = _content_length(response)
             reporter = _ProgressReporter(progress, total)

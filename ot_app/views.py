@@ -126,8 +126,9 @@ class DocumentsView(ttk.Frame):
             ("status", "DURUM", 130, 110, False),
             ("size", "BOYUT", 80, 65, False),
         ]:
-            self.tree.heading(col, text=text, anchor="w")
-            self.tree.column(col, width=width, minwidth=minimum, stretch=stretch, anchor="w")
+            anchor = "w" if col == "title" else "center"
+            self.tree.heading(col, text=text, anchor=anchor)
+            self.tree.column(col, width=width, minwidth=minimum, stretch=stretch, anchor=anchor)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(self.table_area, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")

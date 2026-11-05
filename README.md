@@ -111,6 +111,30 @@ Parolayı hatırla seçeneğini kapatıp kaydederseniz saklanan parola silinir. 
 
 Windows dışında uygulama test/geliştirme amacıyla açılabilir; kayıt defteri yerine açıkça belirtilen geçici oturum modu kullanılır. Bu modda ayarlar diske kaydedilmez.
 
+### İndirilen dosyaların adı
+
+Ayarlar → İndirme konumu bölümündeki **İndirilen dosyanın adı** alanında etiketlerle
+dosya adını belirleyebilirsiniz. Etiket düğmeleri imlecin bulunduğu yere ekleme yapar
+veya seçili metni değiştirir. Örnek dosya adı yazarken güncellenir.
+
+| Etiket | Değer |
+|---|---|
+| `{numara}` | Sunucudaki belge numarası. |
+| `{ad}` | Belge adı / açıklaması; boşsa belge numarası kullanılır. |
+| `{revizyon}` | Belgenin revizyon numarası; sıfır da gösterilir. |
+
+Örneğin `{numara} - {ad} - Rev{revizyon}` formatı,
+`PR-001 - Kalite Prosedürü - Rev3.pdf` gibi bir ad üretir. Dosya uzantısını yazmanız
+gerekmez; bilinen uzantı korunur, eksikse sunucu yanıtından belirlenir. Varsayılan
+`{numara}` mevcut adlandırmayı korur. Format ayarlarla birlikte saklanır ve sonraki
+indirmelere uygulanır; önceden indirilen dosyalar yeniden adlandırılmaz.
+
+En az bir etiket kullanın. Bilinmeyen etiketler, yol ayırıcıları ve geçersiz dosya
+adı karakterleri kaydetmeden önce bildirilir. Belge bilgilerindeki geçersiz
+karakterler mevcut güvenli adlandırma kurallarıyla temizlenir. Farklı belgeler aynı
+adı üretirse aynı işlemde önceki dosyanın üzerine yazılmaz; formatınıza belge
+numarasını ekleyebilir veya ayrı bir hedef klasör seçebilirsiniz.
+
 ### Gelişmiş ayarlar
 
 - **Zaman aşımı:** Her ağ isteğinin bağlantı/okuma bekleme süresi. Toplam iş süresi sınırı değildir. Varsayılan 30 saniye.
@@ -178,11 +202,12 @@ Ardından `Baslat.cmd` çalıştırılabilir. Kurumunuzun paket deposu varsa onu
 
 ## Doğrulama
 
-5 Kasım 2026 incelemesinde **187 test çalıştırıldı: 186 geçti, 1 test atlandı**. Testler macOS üzerinde Python 3.11.15, requests 2.34.2 ve gerçek Tk 9.0.4 pencereleriyle çalıştırıldı.
+5 Kasım 2026 adlandırma ve tablo hizalama güncellemesinde **212 test çalıştırıldı: 211 geçti, 1 test atlandı**. Testler macOS üzerinde Python 3.11.15, requests 2.34.2 ve gerçek Tk 9.0.4 pencereleriyle çalıştırıldı.
 
 - Gerçek yerel HTTP sunucusu ve sahte taşıyıcı testleri: giriş, çerez, iptal, kesilmiş/yanlış kodlanmış yanıt ve mevcut dosyanın korunması.
 - Kayıt defteri/DPAPI sınır testleri: bozuk kayıt, kısmi yazma, bağlantı kimliği ile parola eşleşmesi ve kuyruk koruma.
 - Gerçek Tk testleri: belge ekleme, seçim, filtre, silme/geri alma, indirme, kapanış, ayarlar ve modal pencereler.
+- Dosya adı formatı: etiket ekleme/değiştirme, canlı önizleme, kayıt, eski ayar uyumluluğu, uzantı ve çakışma koruması. Özel adlar JSON/HTML servis yanıtlarını belge olarak kabul ettirmez.
 - İçe/dışa aktarım, CSV formül koruması ve rapor yazma hatasında eski dosyanın korunması.
 - Python 3.10 sözdizimi/derleme ve Ruff `E9,F` kontrolleri geçti. Bağımlılık denetimi bilinen açık bildirmedi.
 

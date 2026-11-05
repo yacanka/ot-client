@@ -80,6 +80,12 @@ class AppSettingsTests(unittest.TestCase):
         self.assertTrue(settings.remember_password)
         self.assertTrue(settings.output_dir.endswith("OT Documents"))
 
+    def test_filename_format_is_validated_with_settings(self):
+        for value in ("", "{unknown}", "../{ad}", None):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                AppSettings(filename_format=value).validate()
+        AppSettings(filename_format="{numara} - {ad} - R{revizyon}").validate()
+
     def test_connection_requires_url_username_and_password(self):
         valid = AppSettings(base_url="https://OT.example.test/app", username="user", password="secret")
         valid.validate(require_connection=True)
@@ -140,6 +146,23 @@ class RegistryStoreTests(unittest.TestCase):
         self.assertEqual(settings.base_url, "")
         self.assertEqual(numbers, [])
         self.assertEqual(self.store.warning, "")
+
+    def test_filename_format_roundtrip_and_legacy_default(self):
+        self.registry.values[SETTINGS_VALUE] = (json.dumps({"username": "legacy"}), REG_SZ)
+        self.assertEqual(self.store.load()[0].filename_format, "{numara}")
+        self.settings.filename_format = "{numara} - {ad} - R{revizyon}"
+        self.store.save(self.settings)
+        restored, _ = self.store.load()
+        self.assertEqual(restored.filename_format, "{numara} - {ad} - R{revizyon}")
+
+    def test_invalid_saved_filename_format_recovers_independently(self):
+        self.registry.values[SETTINGS_VALUE] = (json.dumps({
+            "username": "saved-user", "filename_format": "../{ad}",
+        }), REG_SZ)
+        restored, _ = self.store.load()
+        self.assertEqual(restored.filename_format, "{numara}")
+        self.assertEqual(restored.username, "saved-user")
+        self.assertTrue(self.store.warning)
 
     def test_blank_password_cannot_reuse_saved_secret_with_other_identity(self):
         for changed in ({"base_url": "https://other.example.test"}, {"username": "other-user"}):

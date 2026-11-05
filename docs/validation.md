@@ -1,5 +1,18 @@
 # Verification record — 2026-11-05
 
+## Filename format and table alignment update
+
+- Command: `python -B -m unittest discover -s tests -v`, using the existing isolated test environment.
+- Result: **212 tests; 211 passed, 1 skipped** (native Windows current-user DPAPI).
+- All 21 real Tk interaction tests passed, including filename tag insertion, selected-text replacement, live preview, validation and compact-window scrolling.
+- Additional regressions cover saved/legacy filename formats, revision zero, repeated extensions, metadata traversal characters, formatted-name collisions and worker settings snapshots.
+- Custom filenames retain source/response extension evidence. Renamed JSON/HTML titles cannot authorize service responses; explicitly identified JSON documents remain supported.
+- All 25 Python/PYW files compile in memory and pass Python 3.10 grammar checks. Ruff `E9,F` and `git diff --check` pass.
+- Live Tk widget checks confirmed centered number/revision/status/size columns, left-aligned titles, and settings save/reload. Native screenshot capture was unavailable; widget geometry and interaction tests were used for layout validation.
+- No dependencies changed. Native Windows integration and live corporate OT remain untested; the earlier dependency audit below was not rerun.
+
+## Earlier review
+
 - Runtime: macOS, Python 3.11.15, requests 2.34.2, Tk 9.0.4.
 - Isolated test environment outside the repository; no runtime dependency changes.
 - Command: `python -B -m unittest discover -s tests -v`.
