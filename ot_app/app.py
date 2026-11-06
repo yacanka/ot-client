@@ -9,6 +9,7 @@ from tkinter import messagebox, ttk
 
 from otClient import OTConnector, OTError
 from .actions import DocumentActions
+from .hierarchy import hierarchy_indices
 from .queue_model import QueueRow
 from .settings import AppSettings, RegistryStore, SettingsError
 from .settings_view import SettingsView
@@ -46,10 +47,15 @@ class Application(DocumentActions, tk.Tk):
             for number in documents:
                 row = QueueRow(number)
                 self.rows[row.key] = row
+            hierarchy = self.store.load_hierarchy(documents)
+            by_number = {row.number: row.key for row in self.rows.values()}
+            for row in self.rows.values():
+                row.parent_key = by_number.get(hierarchy.get(row.number))
             startup_warning = getattr(self.store, "warning", "")
         except (SettingsError, ValueError, OSError) as exc:
             startup_warning = f"Kayıtlı ayarlar okunamadı: {exc}"
         self._last_saved_settings = replace(self.settings)
+        self._rebuild_hierarchy_indices()
         self._build_shell()
         self._build_views()
         self.show_view("documents")
@@ -122,10 +128,13 @@ class Application(DocumentActions, tk.Tk):
             "start": self.start_all, "selected": self.start_selected, "cancel": self.cancel_job,
             "settings": lambda: self.show_view("settings"), "choose": self.choose_candidate,
             "open_file": self.open_selected_file, "open_folder": self.open_output_folder,
+            "hierarchy": self.change_hierarchy,
         }
         self.documents_view = DocumentsView(self.content, callbacks)
         self.settings_view = SettingsView(self.content, self.settings, self.save_settings, self.test_connection)
         self.storage_view = StorageView(self.content, self.settings, self.save_settings)
+        self.storage_view.manual_folder_hierarchy_enabled_var.trace_add("write", self._hierarchy_mode_changed)
+        self.documents_view.set_manual_hierarchy(self.settings.manual_folder_hierarchy_enabled)
         self._views = {"documents": self.documents_view, "storage": self.storage_view, "settings": self.settings_view}
         for view in self._views.values():
             view.grid(row=0, column=0, sticky="nsew")
@@ -162,12 +171,23 @@ class Application(DocumentActions, tk.Tk):
                 selected_filter == "Bekleyen" and row.status in {"pending", "searching", "downloading"} or
                 selected_filter == "Tamamlanan" and row.status in SUCCESS or
                 selected_filter == "Sorunlu" and row.status in PROBLEMS or
-                selected_filter == "Seçim gerekli" and row.status == "ambiguous")
+                selected_filter == "Seçim gerekli" and (row.status == "ambiguous" or bool(row.candidates)))
 
     def _row_values(self, row):
         title = row.document.title or row.document.name if row.document else "İşlem sırasında doldurulacak"
         revision = row.document.revision if row.document else "—"
         return row.number, title, revision, STATUS_LABELS.get(row.status, row.status), human_bytes(row.size)
+
+    def _rebuild_hierarchy_indices(self):
+        self._index_values = hierarchy_indices(self._hierarchy_entries())
+
+    def _table_values(self, row):
+        index = self._index_values.get(row.key, "")
+        return ("  " * index.count(".") + index, *self._row_values(row))
+
+    def _hierarchy_mode_changed(self, *_):
+        self.documents_view.set_manual_hierarchy(self.storage_view.manual_folder_hierarchy_enabled_var.get())
+        self.refresh_table()
 
     def refresh_table(self):
         if self._refresh_after:
@@ -176,22 +196,25 @@ class Application(DocumentActions, tk.Tk):
         view = self.documents_view
         tree = view.tree
         old_selection = set(tree.selection())
+        old_focus = tree.focus()
         for key in self._tree_keys - self.rows.keys():
             tree.delete(key)
         self._tree_keys.intersection_update(self.rows)
         visible = []
         for key, row in self.rows.items():
             if key not in self._tree_keys:
-                tree.insert("", "end", iid=key, values=self._row_values(row), tags=(row.status,))
+                tree.insert("", "end", iid=key, values=self._table_values(row), tags=(row.status,))
                 self._tree_keys.add(key)
             else:
-                tree.item(key, values=self._row_values(row), tags=(row.status,))
+                tree.item(key, values=self._table_values(row), tags=(row.status,))
             if self._is_visible(row):
                 visible.append(key)
                 tree.move(key, "", "end")
             else:
                 tree.detach(key)
         tree.selection_set([key for key in visible if key in old_selection])
+        if old_focus in visible:
+            tree.focus(old_focus)
         done = sum(row.status in SUCCESS for row in self.rows.values())
         view.total_var.set(str(len(self.rows)))
         view.done_var.set(str(done))
@@ -219,8 +242,14 @@ class Application(DocumentActions, tk.Tk):
             view.detail_var.set("Seçili belgeleri indirebilir, kaldırabilir veya Ctrl+C ile kopyalayabilirsiniz.")
         else:
             view.detail_var.set("Ctrl / Shift ile çoklu seçim yapın. Ctrl+A tüm görünen belgeleri seçer.")
+        if view.manual_hierarchy:
+            hint = ("Hiyerarşiyi düzenlemek için filtreleri temizleyin." if
+                    view.search_var.get().strip() or view.filter_var.get() != "Tüm belgeler" else
+                    "← Üst seviye / → Alt seviye / Ctrl+Z Geri al")
+            view.detail_var.set((view.detail_var.get() + "  ·  " if selected else "Ctrl / Shift: çoklu seçim.  ") + hint)
 
     def schedule_document_save(self):
+        self._rebuild_hierarchy_indices()
         self._documents_dirty = True
         if self._save_after:
             self.after_cancel(self._save_after)
@@ -233,7 +262,7 @@ class Application(DocumentActions, tk.Tk):
         if not self._documents_dirty:
             return True
         try:
-            self.store.save_documents(self.numbers())
+            self.store.save_documents(self.numbers(), hierarchy=self._hierarchy_numbers())
             self._documents_dirty = False
             return True
         except (SettingsError, ValueError, OSError) as exc:
@@ -253,7 +282,9 @@ class Application(DocumentActions, tk.Tk):
     def _show_settings_error(self, error):
         field = getattr(error, "field", "base_url")
         storage_fields = {"output_dir", "filename_format", "document_subfolder_enabled",
-                          "document_subfolder_format", "document_subfolder_match"}
+                          "manual_folder_hierarchy_enabled",
+                          "document_subfolder_format", "document_subfolder_match",
+                          "download_related_forms", "download_related_attachments"}
         name = "storage" if field in storage_fields else "settings"
         self.show_view(name)
         view = self._views[name]
@@ -264,12 +295,17 @@ class Application(DocumentActions, tk.Tk):
         self.settings_view.mark_saved()
         self.storage_view.mark_saved()
 
+    def _persist_settings(self, settings):
+        documents = self.numbers() if self._documents_dirty else None
+        hierarchy = self._hierarchy_numbers() if self._documents_dirty else None
+        self.store.save(settings, documents, hierarchy=hierarchy)
+
     def save_settings(self):
         if self.busy:
             return False
         try:
             settings = self.read_settings()
-            self.store.save(settings, self.numbers() if self._documents_dirty else None)
+            self._persist_settings(settings)
         except (SettingsError, ValueError, OSError) as exc:
             view = self.storage_view if self.current_view == "storage" else self.settings_view
             view.set_status(str(exc), False)
@@ -305,7 +341,7 @@ class Application(DocumentActions, tk.Tk):
             self.set_notice(str(exc), "warning")
             return None
         try:
-            self.store.save(settings, self.numbers() if self._documents_dirty else None)
+            self._persist_settings(settings)
             self._last_saved_settings = replace(settings)
             self._documents_dirty = False
             self._mark_settings_saved()
@@ -335,7 +371,14 @@ class Application(DocumentActions, tk.Tk):
             return
         self.cancel_event = threading.Event()
         self._job_failed = False
-        items = [JobItem(row.key, row.number, row.document if row.chosen else None) for row in rows]
+        requested = {row.key for row in rows}
+        rows = [row for row in self.rows.values() if row.key in requested]
+        hierarchy = tuple(
+            JobItem(row.key, row.number, row.document if row.chosen else None, row.parent_key)
+            for row in self.rows.values()
+        ) if settings.manual_folder_hierarchy_enabled else None
+        items = ([item for item in hierarchy if item.key in requested] if hierarchy is not None else
+                 [JobItem(row.key, row.number, row.document if row.chosen else None) for row in rows])
         for row in rows:
             row.status, row.message, row.size = "pending", "İşlem sırasına alındı.", None
             row.candidates = ()
@@ -344,7 +387,7 @@ class Application(DocumentActions, tk.Tk):
         self.set_busy(True)
         self.refresh_table()
         self.active_worker = DownloadWorker(settings, items, self.events, self.cancel_event,
-                                             connector_factory=self.connector_factory)
+                                             connector_factory=self.connector_factory, hierarchy=hierarchy)
         self.active_worker.start()
 
     def test_connection(self):
@@ -418,13 +461,19 @@ class Application(DocumentActions, tk.Tk):
                 if name in data:
                     setattr(row, name, data[name])
             self.schedule_refresh()
+        elif event.kind == "hierarchy_resolution" and event.key in self.rows:
+            row = self.rows[event.key]
+            for name in ("document", "candidates", "message"):
+                if name in data:
+                    setattr(row, name, data[name])
+            self.schedule_refresh()
         elif event.kind == "progress" and event.key in self.rows:
             row = self.rows[event.key]
             row.size = data.get("downloaded")
             total = f" / {human_bytes(data['total'])}" if data.get("total") else ""
             view.progress_var.set(f"{row.number}  ·  {human_bytes(row.size)}{total}")
             if event.key in self._tree_keys:
-                view.tree.item(event.key, values=self._row_values(row), tags=(row.status,))
+                view.tree.item(event.key, values=self._table_values(row), tags=(row.status,))
         elif event.kind == "advance":
             view.progress.configure(value=data.get("done", 0))
             view.progress_var.set(f"{data.get('done', 0)} / {data.get('total', 0)} belge işlendi")
@@ -495,7 +544,7 @@ class Application(DocumentActions, tk.Tk):
         try:
             draft = self.read_settings()
             if draft != self._last_saved_settings:
-                self.store.save(draft, self.numbers() if self._documents_dirty else None)
+                self._persist_settings(draft)
                 self._last_saved_settings = replace(draft)
                 self._documents_dirty = False
         except (SettingsError, ValueError, OSError) as exc:

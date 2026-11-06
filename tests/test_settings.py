@@ -72,6 +72,16 @@ class FakeProtector:
 
 
 class AppSettingsTests(unittest.TestCase):
+    def test_related_download_options_default_off_and_reject_non_booleans(self):
+        for name in ("download_related_forms", "download_related_attachments"):
+            self.assertIs(getattr(AppSettings(), name, None), False)
+            for value in ("false", 1, None):
+                settings = AppSettings()
+                setattr(settings, name, value)
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError) as caught:
+                    settings.validate()
+                self.assertEqual(caught.exception.field, name)
+
     def test_subfolder_defaults_preserve_flat_downloads(self):
         settings = AppSettings()
         self.assertFalse(getattr(settings, "document_subfolder_enabled", None))
@@ -184,6 +194,18 @@ class RegistryStoreTests(unittest.TestCase):
         self.assertEqual(settings.base_url, "")
         self.assertEqual(numbers, [])
         self.assertEqual(self.store.warning, "")
+
+    def test_related_options_roundtrip_and_legacy_defaults(self):
+        self.registry.values[SETTINGS_VALUE] = (json.dumps({"username": "legacy"}), REG_SZ)
+        legacy, _ = self.store.load()
+        self.assertIs(getattr(legacy, "download_related_forms", None), False)
+        self.assertIs(getattr(legacy, "download_related_attachments", None), False)
+        for forms, attachments in ((True, False), (False, True), (True, True), (False, False)):
+            settings = replace(self.settings, download_related_forms=forms,
+                               download_related_attachments=attachments)
+            self.store.save(settings)
+            restored, _ = self.store.load()
+            self.assertEqual(restored, settings)
 
     def test_subfolder_settings_roundtrip_and_legacy_defaults(self):
         self.registry.values[SETTINGS_VALUE] = (json.dumps({"username": "legacy"}), REG_SZ)

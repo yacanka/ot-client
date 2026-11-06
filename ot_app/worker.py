@@ -25,6 +25,7 @@ from otClient import (
 )
 
 from .filename_format import DEFAULT_FILENAME_FORMAT, format_document_filename
+from .hierarchy import HierarchyEntry, validate_hierarchy
 from .settings import AppSettings
 from .storage import FolderAmbiguityError, resolve_document_folder
 
@@ -44,6 +45,7 @@ class JobItem:
     key: str
     number: str
     document: Document | None = None
+    parent_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,18 @@ class WorkerEvent:
     kind: str
     key: str = ""
     payload: object = None
+
+
+@dataclass(frozen=True)
+class _HierarchyResolution:
+    """Metadata/folder outcome, independent of any attempted media download."""
+
+    document: Document | None = None
+    folder: Path | None = None
+    failure_key: str | None = None
+    status: str = ""
+    message: str = ""
+    candidates: tuple[Document, ...] = ()
 
 
 def _unique_documents(candidates: Iterable[Document]) -> list[Document]:
@@ -133,6 +147,8 @@ class DownloadWorker(threading.Thread):
         cancel: threading.Event,
         force: bool = False,
         connector_factory=OTConnector,
+        *,
+        hierarchy: tuple[JobItem, ...] | None = None,
     ) -> None:
         super().__init__(name="ot-download-worker", daemon=True)
         self._settings = replace(settings)
@@ -141,6 +157,11 @@ class DownloadWorker(threading.Thread):
         self._cancel = cancel
         self._force = force
         self._connector_factory = connector_factory
+        self._explicit_hierarchy = hierarchy is not None
+        self._hierarchy = tuple(hierarchy) if hierarchy is not None else self._items
+        self._hierarchy_items: dict[str, JobItem] = {}
+        self._hierarchy_cache: dict[str, _HierarchyResolution] = {}
+        self._selected_keys = {item.key for item in self._items}
 
     def _emit(self, kind: str, key: str = "", **payload: object) -> None:
         self._events.put(WorkerEvent(kind, key, payload))
@@ -159,7 +180,109 @@ class DownloadWorker(threading.Thread):
         for item in items:
             self._status(item, "cancelled", "İşlem başlamadan iptal edildi.")
 
+    def _validate_hierarchy(self) -> None:
+        """Reject broken snapshots before settings path checks or connection I/O."""
+        if not self._explicit_hierarchy and any(item.parent_key is not None for item in self._items):
+            raise OTError("Alt satır indirmek için tam klasör hiyerarşisi gereklidir.")
+        try:
+            validate_hierarchy(tuple(HierarchyEntry(item.key, item.parent_key)
+                                     for item in self._hierarchy))
+        except ValueError as error:
+            raise OTError(f"Klasör hiyerarşisi geçersiz: {error}") from None
+        self._hierarchy_items = {item.key: item for item in self._hierarchy}
+        positions = {item.key: index for index, item in enumerate(self._hierarchy)}
+        previous = -1
+        for item in self._items:
+            if self._hierarchy_items.get(item.key) != item or positions[item.key] <= previous:
+                raise OTError("İndirme satırları tam klasör hiyerarşisi ve sırası ile eşleşmiyor.")
+            previous = positions[item.key]
+
+    def _resolve_hierarchy_node(self, connector, node: JobItem, parent: Path) -> _HierarchyResolution:
+        """Resolve one node once, retaining expected failures for this batch."""
+        selected = node.document
+        candidates: tuple[Document, ...] = ()
+        try:
+            self._check_cancelled()
+            if selected is None:
+                if node.key in self._selected_keys:
+                    self._status(node, "searching", "Belge aranıyor…")
+                found = list(connector.search_documents(node.number))
+                self._check_cancelled()
+                if not found:
+                    return _HierarchyResolution(failure_key=node.key, status="not_found",
+                                                message="Bu numara için belge bulunamadı.")
+                selected = select_document(node.number, found)
+                if selected is None:
+                    candidates = tuple(_unique_documents(found))
+                    return _HierarchyResolution(failure_key=node.key, status="ambiguous",
+                                                message=f"{len(candidates)} aday bulundu. İndirilecek belgeyi seçin.",
+                                                candidates=candidates)
+            folder = resolve_document_folder(
+                parent, selected, self._settings.document_subfolder_format,
+                self._settings.document_subfolder_match, strict_descendant=True,
+            )
+            self._check_cancelled()
+            return _HierarchyResolution(document=selected, folder=folder)
+        except DownloadCancelled:
+            raise
+        except (OTError, OSError) as error:
+            return _HierarchyResolution(
+                document=selected, failure_key=node.key,
+                status="folder_ambiguous" if isinstance(error, FolderAmbiguityError) else "error",
+                message=self._message(error), candidates=candidates,
+            )
+
+    def _resolve_hierarchy(self, connector, item: JobItem) -> _HierarchyResolution:
+        """Walk only required ancestors iteratively; never fetch their media."""
+        pending: list[JobItem] = []
+        node = item
+        while node.key not in self._hierarchy_cache:
+            self._check_cancelled()
+            pending.append(node)
+            if node.parent_key is None:
+                break
+            node = self._hierarchy_items[node.parent_key]
+        for node in reversed(pending):
+            self._check_cancelled()
+            parent_result = self._hierarchy_cache.get(node.parent_key)
+            if parent_result is not None and parent_result.failure_key is not None:
+                self._hierarchy_cache[node.key] = parent_result
+                continue
+            parent = parent_result.folder if parent_result else Path(self._settings.output_dir)
+            result = self._resolve_hierarchy_node(connector, node, parent)
+            self._hierarchy_cache[node.key] = result
+            if node.key not in self._selected_keys:
+                details: dict[str, object] = {
+                    "candidates": result.candidates,
+                    "message": result.message or "Klasör hiyerarşisi çözümlendi.",
+                }
+                if result.document is not None:
+                    details["document"] = result.document
+                self._emit("hierarchy_resolution", node.key, **details)
+        return self._hierarchy_cache[item.key]
+
+    def _hierarchy_failure(self, item: JobItem, result: _HierarchyResolution) -> None:
+        status, message = result.status, result.message
+        details: dict[str, object] = {}
+        if result.failure_key != item.key:
+            ancestor = self._hierarchy_items[result.failure_key]
+            status = "folder_ambiguous" if status == "folder_ambiguous" else "error"
+            message = f"Üst satır {ancestor.number}: {message}"
+        else:
+            if result.document is not None:
+                details.update(document=result.document, path="")
+            if result.candidates:
+                details["candidates"] = result.candidates
+        self._status(item, status, message, **details)
+
     def _process_item(self, connector, item: JobItem, filenames: dict[tuple[str, str], tuple[str, str]]) -> None:
+        if self._settings.manual_folder_hierarchy_enabled:
+            result = self._resolve_hierarchy(connector, item)
+            if result.failure_key is not None:
+                self._hierarchy_failure(item, result)
+                return
+            self._download_item(connector, item, result.document, result.folder, filenames)
+            return
         selected = item.document
         if selected is None:
             self._status(item, "searching", "Belge aranıyor…")
@@ -196,20 +319,12 @@ class DownloadWorker(threading.Thread):
                 )
                 return
         self._check_cancelled()
-        file_name = format_document_filename(self._settings.filename_format, selected)
-        source_name = selected.name if self._settings.filename_format.strip() != DEFAULT_FILENAME_FORMAT else None
-        target_name = safe_windows_filename(file_name, selected.id)
-        normalized = (str(Path(output_dir).expanduser().resolve()).casefold(), target_name.casefold())
-        document_key = (selected.content_type, str(selected.id))
-        owner = filenames.get(normalized)
-        if owner is not None and owner != document_key:
-            raise OTError(
-                f"Farklı belgeler aynı dosya adını kullanıyor: {target_name}. "
-                "Önceki dosya korundu. Bu belgeyi ayrı bir hedef klasöre indirin."
-            )
-        # Reserve before downloading: even a failed attempt must not let another
-        # document overwrite a same-named file already present in this batch.
-        filenames[normalized] = document_key
+        self._download_item(connector, item, selected, output_dir, filenames)
+
+    def _download_item(self, connector, item: JobItem, selected: Document,
+                       output_dir: str | Path, filenames) -> None:
+        self._check_cancelled()
+        file_name, source_name = self._reserve_filename(selected, output_dir, filenames)
         self._status(item, "downloading", "Belge indiriliyor…", document=selected)
         progress = _ThrottledProgress(
             lambda downloaded, total: self._emit(
@@ -238,12 +353,116 @@ class DownloadWorker(threading.Thread):
         if result.status not in messages:
             raise ValueError(f"Geçersiz indirme sonucu: {result.status!r}")
         progress.finish(result.bytes_written)
-        self._status(
-            item,
-            result.status,
-            messages[result.status],
-            document=selected,
-            path=str(result.path),
+        message = messages[result.status]
+        status = result.status
+        if selected.content_type == "tds_document" and (
+            self._settings.download_related_forms or self._settings.download_related_attachments
+        ):
+            # Publish the committed primary path before any child request can fail
+            # or be cancelled. Child metadata/progress must not replace this row.
+            self._status(item, "downloading", "İlgili belgeler kontrol ediliyor…",
+                         document=selected, path=str(result.path))
+            summary, failed = self._download_related(connector, item, selected, result.path.parent, filenames)
+            message += " " + summary
+            if failed:
+                status = "error"
+        self._status(item, status, message, document=selected, path=str(result.path))
+
+    def _reserve_filename(self, selected, output_dir, filenames) -> tuple[str, str | None]:
+        file_name = format_document_filename(self._settings.filename_format, selected)
+        source_name = selected.name if self._settings.filename_format.strip() != DEFAULT_FILENAME_FORMAT else None
+        target_name = safe_windows_filename(file_name, selected.id)
+        normalized = (str(Path(output_dir).expanduser().resolve()).casefold(), target_name.casefold())
+        document_key = (selected.content_type, str(selected.id))
+        owner = filenames.get(normalized)
+        if owner is not None and owner != document_key:
+            raise OTError(
+                f"Farklı belgeler aynı dosya adını kullanıyor: {target_name}. "
+                "Önceki dosya korundu. Bu belgeyi ayrı bir hedef klasöre indirin."
+            )
+        # Reserve before downloading: even a failed attempt must not let another
+        # document overwrite a same-named file already present in this batch.
+        filenames[normalized] = document_key
+        return file_name, source_name
+
+    def _download_related(self, connector, item, selected, output_dir, filenames) -> tuple[str, bool]:
+        self._check_cancelled()
+        try:
+            details = connector.get_document_by_id(selected.id, content_type="tds_document")
+            self._check_cancelled()
+            properties = details.get("properties")
+            if not isinstance(properties, dict):
+                raise OTError("Belge bilgisi: properties alanı eksik veya bozuk.")
+        except DownloadCancelled:
+            raise
+        except (OTError, OSError) as error:
+            return "İlgili belgeler alınamadı: " + self._message(error), True
+
+        counts = {"forms": 0, "attachments": 0}
+        errors: list[str] = []
+        for field, content_type, label, enabled in (
+            ("forms", "tds_form", "Form", self._settings.download_related_forms),
+            ("attachments", "tds_attachment", "Ek", self._settings.download_related_attachments),
+        ):
+            if not enabled:
+                continue
+            counts[field], failures = self._download_related_category(
+                connector, item, properties.get(field), content_type, label, output_dir, filenames
+            )
+            errors.extend(failures)
+        summary = f"İlgili dosyalar: {counts['forms']} form, {counts['attachments']} ek tamamlandı."
+        if errors:
+            # Keep table/report messages bounded even for a large malformed list.
+            summary += f" {len(errors)} hata: " + " | ".join(errors[:5])
+            if len(errors) > 5:
+                summary += " | Diğer hatalar için yeniden deneyin."
+        return summary, bool(errors)
+
+    def _download_related_category(self, connector, item, identifiers, content_type, label,
+                                   output_dir, filenames) -> tuple[int, list[str]]:
+        if identifiers is None:
+            return 0, []
+        if not isinstance(identifiers, list):
+            return 0, [f"{label} kimlikleri metin dizisi olmalıdır."]
+        completed = 0
+        errors: list[str] = []
+        seen: set[str] = set()
+        for index, identifier in enumerate(identifiers, 1):
+            self._check_cancelled()
+            if not isinstance(identifier, str) or not identifier.strip():
+                errors.append(f"{label}: {index}. kimlik geçersiz.")
+                continue
+            identifier = identifier.strip()
+            if identifier in seen:
+                continue
+            seen.add(identifier)
+            try:
+                self._status(item, "downloading", f"{label} indiriliyor ({index}/{len(identifiers)})…")
+                self._download_related_file(connector, identifier, content_type, output_dir, filenames)
+                completed += 1
+            except DownloadCancelled:
+                raise
+            except UnicodeError:
+                # JSON may contain lone surrogates. Do not echo these into Tk
+                # or let one malformed child abort the remaining downloads.
+                errors.append(f"{label}: {index}. kaydın kimliği veya belge bilgisi geçerli Unicode değil.")
+            except (OTError, OSError) as error:
+                # Sanitize the identifier as well as the transport error.
+                errors.append(self._message(OTError(f"{label} {identifier}: {self._message(error)}")))
+        return completed, errors
+
+    def _download_related_file(self, connector, identifier, content_type, output_dir, filenames) -> None:
+        self._check_cancelled()
+        details = connector.get_document_by_id(identifier, content_type=content_type)
+        self._check_cancelled()
+        related = Document.from_properties(details.get("properties"), content_type=content_type)
+        if related.id != identifier:
+            raise OTError("İlgili belge bilgisi istenen kimlikle eşleşmiyor.")
+        file_name, source_name = self._reserve_filename(related, output_dir, filenames)
+        self._check_cancelled()
+        connector.download_document(
+            related.id, output_dir, file_name=file_name, source_name=source_name,
+            content_type=content_type, overwrite=self._force, cancel_event=self._cancel,
         )
 
     def run(self) -> None:
@@ -258,6 +477,8 @@ class DownloadWorker(threading.Thread):
             if not total:
                 return
             self._check_cancelled()
+            if self._settings.manual_folder_hierarchy_enabled:
+                self._validate_hierarchy()
             try:
                 self._settings.validate(require_connection=True)
             except ValueError as error:

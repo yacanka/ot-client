@@ -17,11 +17,13 @@ from urllib.parse import urlsplit
 
 from .documents import MAX_DOCUMENTS, MAX_INPUT_CHARACTERS, merge_document_numbers
 from .filename_format import DEFAULT_FILENAME_FORMAT, validate_filename_format, validate_folder_format
+from .hierarchy import HierarchyEntry, validate_hierarchy
 from .win_secrets import DPAPIProtector, MAX_SECRET_BYTES
 
 REGISTRY_PATH = r"Software\OTDesktop"
 SETTINGS_VALUE = "Settings"
 DOCUMENTS_VALUE = "Documents"
+HIERARCHY_VALUE = "DocumentHierarchy"
 PASSWORD_VALUE = "Password"
 REG_SZ = 1
 REG_BINARY = 3
@@ -61,6 +63,9 @@ class AppSettings:
     document_subfolder_enabled: bool = False
     document_subfolder_format: str = "{numara}"
     document_subfolder_match: str = "exact"
+    download_related_forms: bool = False
+    download_related_attachments: bool = False
+    manual_folder_hierarchy_enabled: bool = False
 
     @property
     def tls_verify(self) -> bool | str:
@@ -88,7 +93,9 @@ class AppSettings:
                 raise SettingsValidationError(name, f"{label} geçerli Unicode metni olmalıdır.") from None
             if len(encoded) > MAX_SECRET_BYTES:
                 raise SettingsValidationError(name, f"{label} izin verilen boyutu aşıyor.")
-        for name in ("verify_tls", "remember_password", "document_subfolder_enabled"):
+        for name in ("verify_tls", "remember_password", "document_subfolder_enabled",
+                     "download_related_forms", "download_related_attachments",
+                     "manual_folder_hierarchy_enabled"):
             if type(getattr(self, name)) is not bool:
                 raise SettingsValidationError(name, "Seçenek açık veya kapalı olmalıdır.")
         if isinstance(self.timeout, bool) or not isinstance(self.timeout, (int, float)):
@@ -125,7 +132,9 @@ class AppSettings:
             raise SettingsValidationError("filename_format", str(error)) from None
         if self.document_subfolder_match not in ("exact", "contains"):
             raise SettingsValidationError("document_subfolder_match", "Klasör eşleşmesi birebir veya içerme olmalıdır.")
-        if self.document_subfolder_enabled:
+        if self.document_subfolder_enabled and self.manual_folder_hierarchy_enabled:
+            raise SettingsValidationError("manual_folder_hierarchy_enabled", "Otomatik belge klasörü ve elle klasör hiyerarşisi aynı anda açılamaz.")
+        if self.document_subfolder_enabled or self.manual_folder_hierarchy_enabled:
             try:
                 validate_folder_format(self.document_subfolder_format)
             except ValueError as error:
@@ -154,6 +163,28 @@ class AppSettings:
 
 
 _CONFIG_FIELDS = tuple(item.name for item in fields(AppSettings) if item.name != "password")
+
+
+def _documents_digest(documents: list[str]) -> str:
+    sequence = json.dumps(documents, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(sequence.encode("utf-8")).hexdigest()
+
+
+def _serialize_hierarchy(documents: list[str], hierarchy: dict[str, str | None]) -> str:
+    """Validate the complete structure before any registry or secret changes."""
+    if not isinstance(hierarchy, dict) or len(hierarchy) > MAX_DOCUMENTS:
+        raise ValueError("Belge hiyerarşisi geçerli bir eşleme olmalıdır.")
+    positions = {number: index for index, number in enumerate(documents)}
+    if any(number not in positions for number in hierarchy):
+        raise ValueError("Hiyerarşi belge listesinde bulunmayan bir belge içeriyor.")
+    entries = [HierarchyEntry(number, hierarchy.get(number)) for number in documents]
+    validate_hierarchy(entries)
+    parents = [positions[entry.parent_key] if entry.parent_key is not None else None for entry in entries]
+    record = json.dumps({"version": 1, "documents_sha256": _documents_digest(documents),
+                         "parents": parents}, ensure_ascii=False, separators=(",", ":"))
+    if len(record) > MAX_CONFIG_CHARACTERS:
+        raise ValueError("Belge hiyerarşisi izin verilen toplam boyutu aşıyor.")
+    return record
 
 
 def _credential_context(settings: AppSettings) -> dict[str, str]:
@@ -220,6 +251,7 @@ class RegistryStore:
         self._warnings: dict[str, str] = {}
         self._memory_settings = AppSettings()
         self._memory_documents: list[str] = []
+        self._memory_hierarchy: str | None = None
         self._session_only = registry is None and (platform or sys.platform) != "win32"
         if self._session_only:
             self._warnings["platform"] = "Windows dışında çalışıyor: ayarlar, parola ve belge listesi yalnızca bu oturumda tutulur; uygulama kapanınca silinir."
@@ -266,8 +298,11 @@ class RegistryStore:
             self._warnings["settings"] = "Kayıtlı ayarlar bozuk; varsayılan ayarlar açıldı. Belge listesi ve parola ayrı olarak okunur."
             return settings
         invalid_fields = "password" in config
-        # Validate the CA path under the saved TLS choice, not the default.
-        for name in ("verify_tls", *(key for key in _CONFIG_FIELDS if key != "verify_tls")):
+        # Validate CA under saved TLS; load manual mode last so a conflicting
+        # corrupt record preserves the existing automatic-subfolder behavior.
+        delayed = ("verify_tls", "manual_folder_hierarchy_enabled")
+        for name in ("verify_tls", *(key for key in _CONFIG_FIELDS if key not in delayed),
+                     "manual_folder_hierarchy_enabled"):
             if name not in config:
                 continue
             candidate = replace(settings, **{name: config[name]})
@@ -343,27 +378,76 @@ class RegistryStore:
         self._warnings[category] = message
         raise SettingsError(message) from None
 
-    def save_documents(self, documents: list[str]) -> None:
-        """Autosave only the canonical queue, without reading or changing secrets."""
+    def load_hierarchy(self, documents: list[str]) -> dict[str, str | None]:
+        """Read queue-bound metadata; damaged or stale records leave all roots.
+
+        Recovery never rewrites the stored record. The document queue and the
+        existing two-item ``load`` result remain independently compatible.
+        """
         canonical = merge_document_numbers([], documents)
+        roots = dict.fromkeys(canonical)
+        self._warnings.pop("hierarchy", None)
+        value = self._memory_hierarchy if self._session_only else self._read_value(
+            HIERARCHY_VALUE, REG_SZ, "hierarchy", "belge hiyerarşisi")
+        if value is _MISSING or (self._session_only and value is None):
+            return roots
+        try:
+            if not isinstance(value, str) or len(value) > MAX_CONFIG_CHARACTERS:
+                raise ValueError
+            record = json.loads(value)
+            if (not isinstance(record, dict) or type(record.get("version")) is not int
+                    or record["version"] != 1 or record.get("documents_sha256") != _documents_digest(canonical)):
+                raise ValueError
+            parents = record.get("parents")
+            if not isinstance(parents, list) or len(parents) != len(canonical) or len(parents) > MAX_DOCUMENTS:
+                raise ValueError
+            for index, parent in enumerate(parents):
+                if parent is not None and (type(parent) is not int or not 0 <= parent < index):
+                    raise ValueError
+            entries = [HierarchyEntry(number, canonical[parent] if parent is not None else None)
+                       for number, parent in zip(canonical, parents)]
+            validate_hierarchy(entries)
+            return {entry.key: entry.parent_key for entry in entries}
+        except (ValueError, TypeError, RecursionError):
+            self._warnings["hierarchy"] = "Kayıtlı belge hiyerarşisi geçersiz veya belge listesiyle eşleşmiyor; belgeler kökte açıldı. Mevcut kayıt değiştirilmedi."
+            return roots
+
+    def save_documents(self, documents: list[str], *, hierarchy: dict[str, str | None] | None = None) -> None:
+        """Autosave queue/optional hierarchy without reading or changing secrets.
+
+        Omitted hierarchy metadata and its recovery warning remain untouched.
+        """
+        canonical = merge_document_numbers([], documents)
+        hierarchy_record = _serialize_hierarchy(canonical, hierarchy) if hierarchy is not None else None
         if self._session_only:
             self._memory_documents = list(canonical)
+            if hierarchy_record is not None:
+                self._memory_hierarchy = hierarchy_record
+                self._warnings.pop("hierarchy", None)
             return
         try:
             self._registry.write(DOCUMENTS_VALUE, canonical, REG_MULTI_SZ)
+            if hierarchy_record is not None:
+                self._registry.write(HIERARCHY_VALUE, hierarchy_record, REG_SZ)
         except (OSError, ValueError, TypeError):
             self._save_error("Belge listesi Windows kayıt defterine kaydedilemedi. Liste bu oturumda kullanılabilir.", category="queue_write")
         self._warnings.pop("documents", None)
         self._warnings.pop("queue_write", None)
+        if hierarchy_record is not None:
+            self._warnings.pop("hierarchy", None)
 
-    def save(self, settings: AppSettings, documents: list[str] | None = None) -> None:
+    def save(self, settings: AppSettings, documents: list[str] | None = None, *,
+             hierarchy: dict[str, str | None] | None = None) -> None:
         """Save configuration/secret and optionally replace the document queue.
 
         ``None`` (including an omitted argument) never reads or writes Documents.
         Pass an explicit list, including ``[]``, to replace the persisted queue.
         """
         settings.validate()
+        if hierarchy is not None and documents is None:
+            raise ValueError("Hiyerarşi kaydedilirken belge listesi de verilmelidir.")
         canonical = merge_document_numbers([], documents) if documents is not None else None
+        hierarchy_record = _serialize_hierarchy(canonical, hierarchy) if hierarchy is not None else None
         config_values = {name: getattr(settings, name) for name in _CONFIG_FIELDS}
         config = json.dumps(config_values, ensure_ascii=False, allow_nan=False)
         if len(config) > MAX_CONFIG_CHARACTERS:
@@ -372,6 +456,9 @@ class RegistryStore:
             self._memory_settings = replace(settings)
             if canonical is not None:
                 self._memory_documents = list(canonical)
+            if hierarchy_record is not None:
+                self._memory_hierarchy = hierarchy_record
+                self._warnings.pop("hierarchy", None)
             return
         protected = None
         if settings.remember_password and settings.password:
@@ -398,6 +485,8 @@ class RegistryStore:
             self._registry.write(SETTINGS_VALUE, config, REG_SZ)
             if canonical is not None:
                 self._registry.write(DOCUMENTS_VALUE, canonical, REG_MULTI_SZ)
+            if hierarchy_record is not None:
+                self._registry.write(HIERARCHY_VALUE, hierarchy_record, REG_SZ)
             if not settings.remember_password:
                 self._registry.delete(PASSWORD_VALUE)
             elif protected is not None:
@@ -409,5 +498,7 @@ class RegistryStore:
         if canonical is not None:
             self._warnings.pop("documents", None)
             self._warnings.pop("queue_write", None)
+        if hierarchy_record is not None:
+            self._warnings.pop("hierarchy", None)
         if protected is not None or not settings.remember_password:
             self._warnings.pop("password", None)

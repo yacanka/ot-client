@@ -34,7 +34,7 @@ Başka bir uygun Python seçtiyseniz aynı komutlarda onu kullanın. `python ot_
 | Dosyadan alma | TXT, CSV, TSV veya JSON dosyası seçin. `.xlsx` dosyasından hücreleri kopyalayıp Toplu ekle alanına yapıştırın. |
 | Çoklu seçim | Ctrl ve Shift ile seçin. Ctrl+A yalnızca filtrede görünen satırları seçer. |
 | Silme | Seçileni kaldır veya Delete. İndirilen dosyalar silinmez. |
-| Geri alma | Liste işlemleri → Son kaldırmayı geri al; liste odaktayken Ctrl+Z. Son kaldırma geri alınabilir. |
+| Geri alma | Liste işlemleri → Son liste işlemini geri al; liste odaktayken Ctrl+Z. Son kaldırma, temizleme veya girinti değişikliği geri alınabilir. |
 | Listeyi temizleme | Liste işlemleri → Tüm listeyi temizle. |
 | Listeyi dışa aktarma | Liste işlemleri → Listeyi dışa aktar. Seçim varsa seçili belgeler, yoksa tüm liste aktarılır. |
 | Sonuç raporu | Liste işlemleri → Sonuç raporunu dışa aktar. Excel uyumlu UTF-8 BOM ve noktalı virgülle CSV üretir. |
@@ -104,6 +104,7 @@ HKEY_CURRENT_USER\Software\OTDesktop
 |---|---|---|
 | Settings | REG_SZ | Bağlantı bilgileri, indirme konumu, dosya/alt klasör adlandırma ve eşleştirme ayarları, TLS/CA seçenekleri ve şifreli parola kaydının bağlantı eşleşmesi. Parola içermez. |
 | Documents | REG_MULTI_SZ | Belge numaraları. |
+| DocumentHierarchy | REG_SZ | Sürümlü manuel klasör ağacı; sıralı belge listesine bağlı doğrulama özeti ve üst satır konumları. |
 | Password | REG_BINARY | Windows DPAPI ile geçerli kullanıcı hesabına bağlı şifrelenmiş parola. |
 
 Belge listesi değişiklikleri kısa bir gecikmeyle otomatik kaydedilir. Ayarlar Kaydet, Bağlantıyı test et ve indirme başlatılırken kaydedilir; geçerli ve değiştirilmiş ayarlar normal kapanışta da saklanır. Kayıt hataları görünür kalır. Okunamamış fakat değiştirilmemiş belge listesi, ayar kaydında veya kapanışta boş listeyle değiştirilmez.
@@ -140,7 +141,7 @@ numarasını ekleyebilir veya ayrı bir hedef klasör seçebilirsiniz.
 
 ### Belgeye özel klasörler
 
-Depolama sekmesinde **Her belgeyi özel bir klasöre kaydet** seçeneği varsayılan olarak kapalıdır; dosyalar doğrudan indirme klasörüne kaydedilir. Açıldığında **Klasör adı formatı** alanında aynı `{numara}`, `{ad}` ve `{revizyon}` etiketlerini kullanabilirsiniz. Varsayılan `{numara}` formatı `PR-001.pdf` için `PR-001` klasörünü oluşturur; klasör adına otomatik dosya uzantısı eklenmez. Önizleme yazarken güncellenir. Seçenek kapatılırsa girilen format korunur ve kullanılmaz.
+Depolama sekmesinde **Her belgeyi özel bir klasöre kaydet** seçeneği varsayılan olarak kapalıdır; iki klasör modu da kapalıyken dosyalar doğrudan indirme klasörüne kaydedilir. Açıldığında **Klasör adı formatı** alanında aynı `{numara}`, `{ad}` ve `{revizyon}` etiketlerini kullanabilirsiniz. Varsayılan `{numara}` formatı `PR-001.pdf` için `PR-001` klasörünü oluşturur; klasör adına otomatik dosya uzantısı eklenmez. Önizleme yazarken güncellenir. İki mod da kapatılırsa girilen format korunur ve kullanılmaz.
 
 - **Birebir eşleşme:** Aynı adlı alt klasör kullanılır; yoksa oluşturulur. Varsayılan seçenektir.
 - **İçerme:** Üretilen adı içeren alt klasör kullanılabilir; örneğin `PR-001` için `PR-001 Kalite`. Tam eşleşme varsa önceliklidir. Tek eşleşme kullanılır, hiç yoksa üretilen adla klasör oluşturulur.
@@ -148,6 +149,31 @@ Depolama sekmesinde **Her belgeyi özel bir klasöre kaydet** seçeneği varsay�
 Arama büyük/küçük harf ayrımı olmadan yalnızca doğrudan alt klasörlerde yapılır. Birden fazla aday kalırsa bu belge **Klasör belirsiz** uyarısıyla atlanır, diğer belgeler işlenir. Klasör yerine aynı adlı dosya bulunması veya eşleşen bir bağlantının indirme kökü dışına çıkması hata olarak gösterilir. Farklı belgeler aynı klasörü paylaşabilir; aynı dosya adının farklı klasörlerde kullanılması mümkündür.
 
 Dosya güncelleme davranışı değişmez: mevcut dosyayla içerik aynıysa yeniden yazılmaz, farklıysa tamamlanan indirme atomik olarak onun yerini alır. Yeni bir üzerine yazma/atlama ayarı yoktur. Önceden indirilmiş dosyalar taşınmaz.
+
+### Manuel klasör hiyerarşisi
+
+Depolama sekmesindeki **Klasör hiyerarşisini manuel düzenle** seçeneği varsayılan olarak kapalıdır. Açıldığında diğer klasör seçeneği devre dışı kalır; mod değiştirmek için önce etkin seçeneği kapatın. İki mod aynı klasör adı formatını ve eşleştirme ayarını kullanır.
+
+Belgeler tablosunda **Index** sütunu görünür. İlk yapı `1, 2, 3, …` şeklindedir. Tabloya odaklanıp bir belgeyi seçin:
+
+- **Sağ ok:** Belgeyi önceki kardeş belgenin son alt belgesi yapar. `1, 2, 3` sırasında ikinci belgeyi girintilemek `1, 1.1, 2` üretir. Son belge üzerinde iki sağ ok sırasıyla `1.2` ve `1.1.1` üretir.
+- **Sol ok:** Belgeyi bir üst seviyeye, eski üst belgesinin kalan alt ağacının arkasına taşır. Her iki yönde tüm alt belgeler birlikte taşınır.
+- Aynı üst belgeye bağlı ardışık kardeşleri Ctrl / Shift ile seçip birlikte taşıyabilirsiniz. Seçili üst belgenin alt belgeleri ayrıca taşınmaz. Uyumsuz seçimlerde hiçbir satır değişmez.
+- **Ctrl+Z / Son liste işlemini geri al:** Son girinti, kaldırma veya temizleme işlemini geri alır. Yeni eklenen belgeler kökte korunur. Üst belgeyi kaldırmak seçilmemiş alt belgeleri silmez; bunlar en yakın kalan üst belgeye bağlanır.
+
+İndirme sırasında veya arama/durum filtresi açıkken girinti değiştirilemez. Filtrelenmiş görünümde indeksler tam listedeki değerleridir. Yeni eklenen/içe aktarılan belgeler kökte başlar. İndeksler yalnızca görünüm içindir; klasör adları her belgenin kendi bilgileriyle formattan üretilir. Örneğin `A → B → C` ağacı `{numara}` ile `A/B/C` klasörlerini oluşturur; her belge kendi klasörüne kaydedilir.
+
+**Birebir / İçerme** eşleştirmesi her seviyede kendi üst klasörü içinde uygulanır. Yalnızca alt belgeyi indirirseniz üst belgelerin bilgileri ve klasörleri çözülür; üst belgelerin dosyaları indirilmez. Çözülemeyen veya belirsiz üst belge, alt belgeye açıklayıcı hata verir. Üst belgenin dosya indirmesi başarısız olsa da klasörü çözüldüyse alt belgeler işlenebilir. Form ve ekler ait oldukları belgenin klasöründe kalır.
+
+Ağaç, listeyle birlikte otomatik kaydedilir; mod kapatılıp açıldığında ve Windows'ta uygulama yeniden başlatıldığında korunur. Hiyerarşi kaydı bozuk veya listeyle uyumsuzsa uyarı gösterilir ve belgeler düz listede açılır; mevcut kayıt kendiliğinden değiştirilmez. Kayıt hatasında değişiklikler oturumda kalır ve yeniden kaydedilebilir. Windows dışında yalnızca oturumluk saklama geçerlidir. Liste dışa aktarımları belge numaralarını içerir; ağaç aktarımı içermez. Yapı değişikliği önceden indirilmiş dosyaları taşımaz veya silmez.
+
+### İlgili form ve ekler
+
+Depolama sekmesindeki **İlgili formları da indir** ve **İlgili ekleri de indir** seçenekleri bağımsızdır ve varsayılan olarak kapalıdır. Açık olan seçenekler için ana belge indirildikten sonra detay yanıtındaki `properties.forms` ve `properties.attachments` kimlikleri okunur. Form bilgileri `tds_form/{id}`, ek bilgileri `tds_attachment/{id}` üzerinden; içerikleri bu adreslerin `/media` yolundan alınır.
+
+İlgili dosyalar ana belgeyle **aynı klasöre** kaydedilir. Dosya adı formatı her form ve ekin kendi numarası, adı ve revizyonuyla uygulanır. Ana belge için mevcut bir alt klasör eşleşmişse ilgili dosyalar da o klasöre kaydedilir. Aynı türde tekrarlanan kimlikler belge başına bir kez işlenir. Yalnızca ana dokümanın doğrudan ilişkileri izlenir; form/ekler üzerinden yeni ilişkiler aranmaz.
+
+Ana belge **Güncel** olsa da ilişkili dosyalar kontrol edilir. Bir form veya ek alınamazsa ana belge ve tamamlanmış dosyalar korunur; kalan dosyalar ve sonraki belgeler işlenir. Satır **Hata** durumunda, tamamlanan form/ek sayıları ve hata özetiyle gösterilir (ilk beş hata listelenir). **Sorunluları yeniden dene** ilişkileri yeniden okur; aynı içerikteki dosyalar tekrar yazılmaz. İptal kalan işlemleri durdurur, tamamlanmış dosyaları silmez. Seçenekler kapalıyken ek detay isteği yapılmaz.
 
 ### Gelişmiş ayarlar
 
@@ -197,6 +223,8 @@ with OTConnector(
 Örnekteki değerleri kendi çağıran uygulamanızdan sağlayın; gerçek parolayı kaynak koda yerleştirmeyin. `search_document()` ham JSON için korunmuştur. `download_document()` artık boolean yerine `DownloadResult` döndürür; `status` alanı `downloaded`, `updated` veya `unchanged` olabilir. Hatalar `OTError`, iptal `DownloadCancelled` ile bildirilir. Aynı istemciyi birden çok iş parçacığında paylaşmayın.
 
 `search_documents()` numarayı önce `tds_search_documents` üzerinde arar. Sonuç boşsa `tds_search_forms`, o da boşsa `tds_search_attachments` sorgulanır. İlk dolu aday listesi kullanılır; sonraki kaynaklara istek atılmaz. Çoklu adaylarda mevcut seçim kuralları uygulanır. Hatalar boş sonuç sayılmaz ve sonraki kaynağa geçilmez.
+
+`Document.from_properties(properties, *, content_type="tds_document")`, arama veya detay yanıtının `properties` nesnesini aynı metadata kurallarıyla `Document` modeline dönüştürür; eksik/geçersiz zorunlu alanlarda `OTError` verir. `get_document_by_id()` ham JSON döndürmeye devam eder. İlgili belgeleri topluca indirme davranışı masaüstü worker'ına aittir; `download_document()` tek dosya indirir.
 
 Sonucun `content_type` alanını `download_document()` veya `get_document_by_id()` çağrısına aktarın. Bilgi `/TDS/contents/{content_type}/{id}`, dosya aynı adresin `/media` yolundan alınır. Türler `tds_document`, `tds_form` ve `tds_attachment` olabilir; varsayılan `tds_document` olarak korunur. İndirme hatasında diğer kaynağa geçilmez. `search_document()` yalnızca doküman aramasının ham JSON yanıtını döndürür.
 

@@ -21,10 +21,12 @@ def _resolve(path: Path) -> Path:
         raise OTError("Alt klasör yolu çözülemedi. Klasör bağlantılarını kontrol edin.") from None
 
 
-def _checked_directory(path: Path, root: Path) -> Path:
+def _checked_directory(path: Path, root: Path, strict_descendant: bool = False) -> Path:
     resolved = _resolve(path)
     if not resolved.is_relative_to(root):
         raise OTError("Alt klasör bağlantısı indirme klasörünün dışına çıkıyor. Farklı bir klasör seçin.")
+    if strict_descendant and resolved == root:
+        raise OTError("Alt klasör bağlantısı üst klasörün kendisini gösteriyor. Farklı bir klasör seçin.")
     if not resolved.is_dir():
         raise OTError("Alt klasör hedefinde aynı adlı bir dosya veya özel öğe var. Farklı bir ad seçin.")
     return resolved
@@ -44,6 +46,8 @@ def resolve_document_folder(
     document: Document,
     folder_format: str,
     match: str = "exact",
+    *,
+    strict_descendant: bool = False,
 ) -> Path:
     """Reuse one matching child directory or create a sanitized folder.
 
@@ -53,6 +57,8 @@ def resolve_document_folder(
     must resolve inside the explicitly configured (and resolved) output root.
     The root itself follows the download client's existing expand/create/resolve
     behavior, so an explicitly selected root link remains supported.
+    ``strict_descendant`` also rejects links back to this level's parent; manual
+    hierarchies use it to ensure that every level advances into a child folder.
     """
     if match not in ("exact", "contains"):
         raise ValueError("Alt klasör eşleştirme yöntemi exact veya contains olmalıdır.")
@@ -74,8 +80,8 @@ def resolve_document_folder(
             "Klasör adlarını veya eşleştirme ayarını düzenleyip yeniden deneyin."
         )
     if matches:
-        return _checked_directory(matches[0], root)
+        return _checked_directory(matches[0], root, strict_descendant)
     target = root / name
     target.mkdir(exist_ok=True)
     # Recheck after mkdir: an entry may have appeared since the directory scan.
-    return _checked_directory(target, root)
+    return _checked_directory(target, root, strict_descendant)

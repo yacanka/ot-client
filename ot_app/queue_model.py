@@ -1,4 +1,4 @@
-"""In-memory presentation state; only document numbers are persisted."""
+"""In-memory presentation state for document queue rows."""
 from dataclasses import dataclass, field
 from uuid import uuid4
 
@@ -16,3 +16,4 @@ class QueueRow:
     path: str = ""
     size: int | None = None
     chosen: bool = False
+    parent_key: str | None = None

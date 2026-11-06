@@ -35,6 +35,9 @@ class StorageView(SettingsPage):
         self.document_subfolder_enabled_var = tk.BooleanVar(
             self, value=settings.document_subfolder_enabled
         )
+        self.manual_folder_hierarchy_enabled_var = tk.BooleanVar(
+            self, value=settings.manual_folder_hierarchy_enabled
+        )
         self.document_subfolder_format_var = tk.StringVar(
             self, value=settings.document_subfolder_format
         )
@@ -42,25 +45,34 @@ class StorageView(SettingsPage):
             self, value=settings.document_subfolder_match
         )
         self.folder_preview_var = tk.StringVar(self)
+        self.download_related_forms_var = tk.BooleanVar(self, value=settings.download_related_forms)
+        self.download_related_attachments_var = tk.BooleanVar(self, value=settings.download_related_attachments)
         self._build_output_card()
         self._build_folder_card()
+        self._build_related_card()
         self._build_footer(on_save)
         self._field_widgets = {
             "output_dir": self.output_dir_entry,
             "filename_format": self.filename_format_entry,
             "document_subfolder_enabled": self.document_subfolder_enabled_button,
+            "manual_folder_hierarchy_enabled": self.manual_folder_hierarchy_enabled_button,
             "document_subfolder_format": self.document_subfolder_format_entry,
             "document_subfolder_match": self._folder_match_buttons[0],
+            "download_related_forms": self.download_related_forms_button,
+            "download_related_attachments": self.download_related_attachments_button,
         }
         for variable in (
             self.output_dir_var, self.filename_format_var,
             self.document_subfolder_enabled_var, self.document_subfolder_format_var,
+            self.manual_folder_hierarchy_enabled_var,
             self.document_subfolder_match_var,
+            self.download_related_forms_var, self.download_related_attachments_var,
         ):
             variable.trace_add("write", self._on_settings_changed)
         self.filename_format_var.trace_add("write", self._update_filename_preview)
         self.document_subfolder_format_var.trace_add("write", self._update_folder_preview)
         self.document_subfolder_enabled_var.trace_add("write", self._update_folder_controls)
+        self.manual_folder_hierarchy_enabled_var.trace_add("write", self._update_folder_controls)
         self._update_folder_controls()
 
     def _build_output_card(self) -> None:
@@ -112,10 +124,24 @@ class StorageView(SettingsPage):
             card, text="Her belgeyi özel bir klasöre kaydet",
             variable=self.document_subfolder_enabled_var, style="SettingsCard.TCheckbutton",
         )
-        self.document_subfolder_enabled_button.grid(row=1, column=0, sticky="w", pady=(10, 15))
+        self.document_subfolder_enabled_button.grid(row=1, column=0, sticky="w", pady=(10, 5))
         self._editable.append(self.document_subfolder_enabled_button)
+        self.manual_folder_hierarchy_enabled_button = ttk.Checkbutton(
+            card, text="Klasör hiyerarşisini manuel düzenle",
+            variable=self.manual_folder_hierarchy_enabled_var, style="SettingsCard.TCheckbutton",
+        )
+        self.manual_folder_hierarchy_enabled_button.grid(row=2, column=0, sticky="w", pady=(0, 7))
+        self._editable.append(self.manual_folder_hierarchy_enabled_button)
+        hierarchy_hint = ttk.Label(
+            card, text="Belgeler tablosunda sağ / sol oklarla alt klasörleri düzenleyin. "
+            "Birden fazla ardışık kardeş belgeyi birlikte taşıyabilirsiniz. "
+            "Yapı saklanır; önceden indirilen dosyalar taşınmaz.",
+            style="CardMuted.TLabel", wraplength=580, justify="left",
+        )
+        hierarchy_hint.grid(row=3, column=0, sticky="ew", pady=(0, 15))
+        self._wrap_labels.append(hierarchy_hint)
         field = ttk.Frame(card, style="Card.TFrame")
-        field.grid(row=2, column=0, sticky="ew")
+        field.grid(row=4, column=0, sticky="ew")
         field.columnconfigure(0, weight=1)
         self._field_label(field, "Klasör adı formatı")
         self.document_subfolder_format_entry = self._entry(
@@ -133,11 +159,11 @@ class StorageView(SettingsPage):
         )
         self._folder_preview.grid(row=3, column=0, sticky="ew", pady=(7, 0))
         self._wrap_labels.extend((hint, self._folder_preview))
-        self._field_label(card, "Mevcut klasörle eşleştirme", row=3).grid_configure(pady=(17, 6))
+        self._field_label(card, "Mevcut klasörle eşleştirme", row=5).grid_configure(pady=(17, 6))
         self._folder_match_buttons = []
         for row, value, text in (
-            (4, "exact", "Birebir eşleşme"),
-            (5, "contains", "İçerme"),
+            (6, "exact", "Birebir eşleşme"),
+            (7, "contains", "İçerme"),
         ):
             button = ttk.Radiobutton(
                 card, text=text, value=value, variable=self.document_subfolder_match_var,
@@ -147,14 +173,39 @@ class StorageView(SettingsPage):
             self._folder_match_buttons.append(button)
             self._editable.append(button)
         match_hint = ttk.Label(
-            card, text="Yalnızca indirme konumunun doğrudan alt klasörleri, büyük/küçük harf "
-            "ayrımı olmadan aranır. Birebir eşleşme önceliklidir. Eşleşme yoksa klasör "
+            card, text="Her belgenin üst klasöründeki doğrudan alt klasörler, büyük/küçük harf "
+            "ayrımı olmadan aranır. Manuel modda bu kural her seviyede uygulanır. "
+            "Birebir eşleşme önceliklidir. Eşleşme yoksa klasör "
             "oluşturulur; birden çok eşleşme varsa belge atlanır.",
             style="CardMuted.TLabel", wraplength=580, justify="left",
         )
-        match_hint.grid(row=6, column=0, sticky="ew", pady=(5, 0))
+        match_hint.grid(row=8, column=0, sticky="ew", pady=(5, 0))
         self._wrap_labels.append(match_hint)
         self._update_folder_preview()
+
+    def _build_related_card(self) -> None:
+        card = self._card(2)
+        ttk.Label(card, text="İlgili belgeler", style="SettingsCardTitle.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        self.download_related_forms_button = ttk.Checkbutton(
+            card, text="İlgili formları da indir", variable=self.download_related_forms_var,
+            style="SettingsCard.TCheckbutton",
+        )
+        self.download_related_forms_button.grid(row=1, column=0, sticky="w", pady=(10, 5))
+        self.download_related_attachments_button = ttk.Checkbutton(
+            card, text="İlgili ekleri de indir", variable=self.download_related_attachments_var,
+            style="SettingsCard.TCheckbutton",
+        )
+        self.download_related_attachments_button.grid(row=2, column=0, sticky="w", pady=(0, 5))
+        self._editable.extend((self.download_related_forms_button, self.download_related_attachments_button))
+        hint = ttk.Label(
+            card, text="Form ve ekler belgeyle aynı klasöre kaydedilir. Dosya adı formatı "
+            "her form ve ekin kendi bilgileriyle uygulanır.",
+            style="CardMuted.TLabel", wraplength=580, justify="left",
+        )
+        hint.grid(row=3, column=0, sticky="ew", pady=(5, 0))
+        self._wrap_labels.append(hint)
 
     def _update_filename_preview(self, *_: object) -> None:
         sample = Document("preview", "PR-001.pdf", "Kalite Prosedürü", "", 3)
@@ -181,9 +232,10 @@ class StorageView(SettingsPage):
     def read_settings(self, base: AppSettings | None = None) -> AppSettings:
         """Merge storage fields, validating folder grammar only when enabled."""
         enabled = self.document_subfolder_enabled_var.get()
+        manual = self.manual_folder_hierarchy_enabled_var.get()
         formats = [("filename_format", self.filename_format_var.get(), validate_filename_format)]
         folder_format = self.document_subfolder_format_var.get()
-        if enabled:
+        if enabled or manual:
             formats.append(("document_subfolder_format", folder_format, validate_folder_format))
         for field, value, validate in formats:
             try:
@@ -197,8 +249,11 @@ class StorageView(SettingsPage):
             output_dir=self.output_dir_var.get().strip(),
             filename_format=self.filename_format_var.get().strip(),
             document_subfolder_enabled=enabled,
-            document_subfolder_format=folder_format.strip() if enabled else folder_format,
+            manual_folder_hierarchy_enabled=manual,
+            document_subfolder_format=folder_format.strip() if enabled or manual else folder_format,
             document_subfolder_match=self.document_subfolder_match_var.get(),
+            download_related_forms=self.download_related_forms_var.get(),
+            download_related_attachments=self.download_related_attachments_var.get(),
         )
 
     def set_busy(self, busy: bool) -> None:
@@ -206,7 +261,15 @@ class StorageView(SettingsPage):
         self._update_folder_controls()
 
     def _update_folder_controls(self, *_: object) -> None:
-        disabled = self._busy or not self.document_subfolder_enabled_var.get()
+        individual = self.document_subfolder_enabled_var.get()
+        manual = self.manual_folder_hierarchy_enabled_var.get()
+        self.document_subfolder_enabled_button.state(
+            ["disabled"] if self._busy or manual else ["!disabled"]
+        )
+        self.manual_folder_hierarchy_enabled_button.state(
+            ["disabled"] if self._busy or individual else ["!disabled"]
+        )
+        disabled = self._busy or not (individual or manual)
         states = ["disabled"] if disabled else ["!disabled"]
         for widget in (self.document_subfolder_format_entry, *self._folder_match_buttons):
             widget.state(states)

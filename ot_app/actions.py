@@ -5,11 +5,55 @@ from tkinter import filedialog, messagebox
 
 from .dialogs import BulkInputDialog, CandidateDialog
 from .documents import merge_document_numbers, parse_document_text, read_document_file, write_csv_report, write_document_file
+from .hierarchy import HierarchyEntry, HierarchyError, move_hierarchy, remove_hierarchy, validate_hierarchy
 from .queue_model import QueueRow
 from .views import STATUS_LABELS
 
 
 class DocumentActions:
+    def _hierarchy_entries(self):
+        return tuple(HierarchyEntry(row.key, row.parent_key) for row in self.rows.values())
+
+    def _hierarchy_numbers(self):
+        return {
+            row.number: self.rows[row.parent_key].number if row.parent_key is not None else None
+            for row in self.rows.values()
+        }
+
+    def _remember_structure(self):
+        # Row objects retain live results; the immutable links preserve old ancestry.
+        self._undo = (tuple(self.rows.values()), self._hierarchy_entries())
+
+    def _apply_hierarchy(self, entries):
+        rows = {entry.key: self.rows[entry.key] for entry in entries}
+        for entry in entries:
+            rows[entry.key].parent_key = entry.parent_key
+        self.rows = rows
+
+    def change_hierarchy(self, direction):
+        view = self.documents_view
+        if self.busy or not view.manual_hierarchy:
+            return "break"
+        if view.search_var.get().strip() or view.filter_var.get() != "Tüm belgeler":
+            self.set_notice("Hiyerarşiyi düzenlemek için arama ve durum filtrelerini temizleyin.", "warning")
+            return "break"
+        entries = self._hierarchy_entries()
+        try:
+            changed = move_hierarchy(entries, view.tree.selection(), direction)
+        except HierarchyError as error:
+            self.set_notice(str(error), "warning")
+            return "break"
+        if changed != entries:
+            self._remember_structure()
+            self._apply_hierarchy(changed)
+            self.schedule_document_save()
+            self.refresh_table()
+            focus = view.tree.focus()
+            if focus:
+                view.tree.see(focus)
+            self.set_notice("Klasör hiyerarşisi güncellendi. Ctrl+Z ile geri alabilirsiniz.")
+        return "break"
+
     def numbers(self):
         return [row.number for row in self.rows.values()]
 
@@ -76,9 +120,9 @@ class DocumentActions:
         keys = self.documents_view.tree.selection()
         if not keys:
             return
-        self._undo = list(self.rows.items())
-        for key in keys:
-            self.rows.pop(key, None)
+        changed = remove_hierarchy(self._hierarchy_entries(), keys)
+        self._remember_structure()
+        self._apply_hierarchy(changed)
         self.schedule_document_save()
         self.refresh_table()
         self.set_notice(f"{len(keys)} belge kaldırıldı. Liste işlemleri → Geri al veya Ctrl+Z ile geri getirebilirsiniz.")
@@ -88,20 +132,22 @@ class DocumentActions:
             return
         if not messagebox.askyesno("Belge listesini temizle", f"Listedeki {len(self.rows)} belge numarası kaldırılsın mı?\n\nİndirilen dosyalar silinmez.", parent=self):
             return
-        self._undo = list(self.rows.items())
+        self._remember_structure()
         self.rows.clear()
         self.schedule_document_save()
         self.refresh_table()
-        self.set_notice("Belge listesi temizlendi. Son kaldırmayı geri alabilirsiniz.")
+        self.set_notice("Belge listesi temizlendi. Son liste işlemini geri alabilirsiniz.")
 
     def undo_remove(self):
         if self.busy or not self._undo:
             return
         current = dict(self.rows)
         by_number = {row.number: row for row in current.values()}
+        old_rows, old_entries = self._undo
+        old_by_key = {row.key: row for row in old_rows}
         restored = {}
         seen = set()
-        for key, old in self._undo:
+        for old in old_rows:
             row = by_number.get(old.number, old)
             if row.number not in seen:
                 restored[row.key] = row
@@ -110,16 +156,25 @@ class DocumentActions:
             if row.number not in seen:
                 restored[key] = row
                 seen.add(row.number)
+        restored_by_number = {row.number: row.key for row in restored.values()}
+        parents = {}
+        for entry in old_entries:
+            number = old_by_key[entry.key].number
+            parent_number = old_by_key[entry.parent_key].number if entry.parent_key is not None else None
+            parents[restored_by_number[number]] = restored_by_number.get(parent_number)
+        entries = tuple(HierarchyEntry(key, parents.get(key)) for key in restored)
         try:
             merge_document_numbers([], [row.number for row in restored.values()])
+            validate_hierarchy(entries)
         except ValueError as exc:
             self.set_notice(f"Geri alınamadı: {exc} Önce listede yer açın.", "warning")
             return
         self.rows = restored
+        self._apply_hierarchy(entries)
         self._undo = None
         self.schedule_document_save()
         self.refresh_table()
-        self.set_notice("Son kaldırma işlemi geri alındı.")
+        self.set_notice("Son liste işlemi geri alındı.")
 
     def copy_selected(self):
         rows = self.selected_rows()

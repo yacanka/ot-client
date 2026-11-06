@@ -16,17 +16,23 @@ class UserFlowTests(unittest.TestCase):
             def __init__(self):
                 self.settings = AppSettings()
                 self.documents = []
+                self.hierarchy = {}
 
             def load(self):
                 return self.settings, list(self.documents)
 
-            def save(self, settings, documents=None):
+            def load_hierarchy(self, documents):
+                return {number: self.hierarchy.get(number) for number in documents}
+
+            def save(self, settings, documents=None, *, hierarchy=None):
                 self.settings = settings
                 if documents is not None:
-                    self.documents = list(documents)
+                    self.save_documents(documents, hierarchy=hierarchy)
 
-            def save_documents(self, documents):
+            def save_documents(self, documents, *, hierarchy=None):
                 self.documents = list(documents)
+                if hierarchy is not None:
+                    self.hierarchy = dict(hierarchy)
 
         self.store = MemoryStore()
         self.app = Application(store=self.store)
@@ -109,6 +115,28 @@ class UserFlowTests(unittest.TestCase):
         self.app.update()
         self.assertEqual(self.app.current_view, "storage")
         self.assertIn("etiket", self.app.storage_view._status_var.get().lower())
+
+    def test_related_checkboxes_save_independently_and_freeze_during_download(self):
+        view = self.app.storage_view
+        for field in ("download_related_forms", "download_related_attachments"):
+            button = getattr(view, field + "_button", None)
+            self.assertIsNotNone(button)
+            self.assertFalse(getattr(view, field + "_var").get())
+            button.invoke()
+            self.assertIn("Kaydedilmemiş", view._status_var.get())
+            self.app.settings_view.save_button.invoke()
+            self.assertTrue(getattr(self.store.settings, field))
+        self.app.set_busy(True)
+        for field in ("download_related_forms", "download_related_attachments"):
+            button = getattr(view, field + "_button")
+            self.assertIn("disabled", button.state())
+            button.invoke()
+            self.assertTrue(getattr(view, field + "_var").get())
+        self.app.set_busy(False)
+        view.download_related_forms_button.invoke()
+        view.save_button.invoke()
+        self.assertFalse(self.store.settings.download_related_forms)
+        self.assertTrue(self.store.settings.download_related_attachments)
 
     def test_invalid_timeout_keeps_advanced_connection_field_visible(self):
         self.app.settings_view.timeout_var.set("invalid")

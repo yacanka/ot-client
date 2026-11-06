@@ -94,6 +94,38 @@ class Document:
     revision: int = 0
     content_type: Literal["tds_document", "tds_form", "tds_attachment"] = "tds_document"
 
+    @classmethod
+    def from_properties(
+        cls, properties: dict[str, Any], *,
+        content_type: Literal["tds_document", "tds_form", "tds_attachment"] = "tds_document",
+        operation: str = "Belge bilgisi",
+    ) -> Document:
+        """Normalize search/detail properties; raise OTError for malformed metadata."""
+        if content_type not in ("tds_document", "tds_form", "tds_attachment"):
+            raise OTError("Geçersiz belge türü.")
+        if not isinstance(properties, dict):
+            raise OTError(f"{operation}: properties alanı eksik veya bozuk.")
+        document_id = properties.get("id")
+        name = properties.get("object_name")
+        if not isinstance(document_id, str) or not document_id.strip() or not isinstance(name, str) or not name.strip():
+            raise OTError(f"{operation}: Kaydın kimliği veya belge adı eksik ya da geçersiz.")
+        title = properties.get("title", "")
+        authors = properties.get("authors", [])
+        revision = properties.get("revision", 0)
+        if title is None:
+            title = ""
+        if authors is None:
+            authors = []
+        if not isinstance(title, str):
+            raise OTError(f"{operation}: Kaydın başlığı metin biçiminde değil.")
+        if isinstance(authors, str):
+            author = " ".join(authors.split())
+        elif isinstance(authors, list) and all(isinstance(item, str) for item in authors):
+            author = ", ".join(" ".join(item.split()) for item in authors if item.strip())
+        else:
+            raise OTError(f"{operation}: Kaydın yazar bilgisi geçersiz.")
+        return cls(document_id.strip(), name.strip(), " ".join(title.split()), author, revision, content_type)
+
     def __str__(self) -> str:
         title = self.title[:50] + "..." if len(self.title) > 50 else self.title
         return f"[{self.name}] {title}"
@@ -702,26 +734,9 @@ class OTConnector:
             properties = content.get("properties") if isinstance(content, dict) else None
             if not isinstance(properties, dict):
                 raise OTError(f"{operation}: {index}. kaydın content.properties alanı eksik veya bozuk.")
-            document_id = properties.get("id")
-            name = properties.get("object_name")
-            if not isinstance(document_id, str) or not document_id.strip() or not isinstance(name, str) or not name.strip():
-                raise OTError(f"{operation}: {index}. kaydın kimliği veya belge adı eksik ya da geçersiz.")
-            title = properties.get("title", "")
-            authors = properties.get("authors", [])
-            revision = properties.get("revision", 0)
-            if title is None:
-                title = ""
-            if authors is None:
-                authors = []
-            if not isinstance(title, str):
-                raise OTError(f"{operation}: {index}. kaydın başlığı metin biçiminde değil.")
-            if isinstance(authors, str):
-                author = " ".join(authors.split())
-            elif isinstance(authors, list) and all(isinstance(item, str) for item in authors):
-                author = ", ".join(" ".join(item.split()) for item in authors if item.strip())
-            else:
-                raise OTError(f"{operation}: {index}. kaydın yazar bilgisi geçersiz.")
-            documents.append(Document(document_id.strip(), name.strip(), " ".join(title.split()), author, revision, content_type))
+            documents.append(Document.from_properties(
+                properties, content_type=content_type, operation=f"{operation}: {index}. kayıt"
+            ))
         return documents
 
     @staticmethod

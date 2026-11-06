@@ -20,6 +20,7 @@ class DocumentsView(ttk.Frame):
         super().__init__(parent)
         self.callbacks = callbacks
         self.busy = False
+        self.manual_hierarchy = False
         self.compact = False
         self.input_var = tk.StringVar()
         self.search_var = tk.StringVar()
@@ -109,7 +110,7 @@ class DocumentsView(ttk.Frame):
         self.list_menu.add_command(label="Sonuç raporunu dışa aktar…", command=self.callbacks["report"])
         self.list_menu.add_separator()
         self.list_menu.add_command(label="Sorunluları yeniden dene", command=self.callbacks["retry"])
-        self.list_menu.add_command(label="Son kaldırmayı geri al    Ctrl+Z", command=self.callbacks["undo"])
+        self.list_menu.add_command(label="Son liste işlemini geri al    Ctrl+Z", command=self.callbacks["undo"])
         self.list_menu.add_separator()
         self.list_menu.add_command(label="Tüm listeyi temizle…", command=self.callbacks["clear"])
         self.menu_button = ttk.Menubutton(toolbar, text="Liste işlemleri", menu=self.list_menu)
@@ -118,22 +119,28 @@ class DocumentsView(ttk.Frame):
         self.table_area.grid(row=1, column=0, sticky="nsew")
         self.table_area.columnconfigure(0, weight=1)
         self.table_area.rowconfigure(0, weight=1)
-        self.tree = ttk.Treeview(self.table_area, columns=("number", "title", "revision", "status", "size"),
+        self._data_columns = ("number", "title", "revision", "status", "size")
+        self.tree = ttk.Treeview(self.table_area, columns=("index", *self._data_columns),
+                                 displaycolumns=self._data_columns,
                                  show="headings", selectmode="extended", height=5)
         for col, text, width, minimum, stretch in [
+            ("index", "Index", 110, 75, False),
             ("number", "BELGE NUMARASI", 160, 110, False),
             ("title", "BELGE ADI / AÇIKLAMA", 300, 140, True),
             ("revision", "REVİZYON", 100, 80, False),
             ("status", "DURUM", 130, 110, False),
             ("size", "BOYUT", 80, 65, False),
         ]:
-            anchor = "w" if col == "title" else "center"
+            anchor = "w" if col in {"index", "title"} else "center"
             self.tree.heading(col, text=text, anchor=anchor)
             self.tree.column(col, width=width, minwidth=minimum, stretch=stretch, anchor=anchor)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(self.table_area, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll.set)
+        horizontal = ttk.Scrollbar(self.table_area, orient="horizontal", command=self.tree.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        self.tree.configure(xscrollcommand=horizontal.set)
         for state in STATUS_LABELS:
             color = GREEN if state in SUCCESS else RED if state == "error" else AMBER if state in {"not_found", "ambiguous", "folder_ambiguous"} else BLUE if state in {"searching", "downloading"} else MUTED
             self.tree.tag_configure(state, foreground=color)
@@ -142,6 +149,8 @@ class DocumentsView(ttk.Frame):
         self.tree.bind("<Control-a>", self._select_all)
         self.tree.bind("<Control-c>", lambda _: self.callbacks["copy"]())
         self.tree.bind("<Control-z>", lambda _: self.callbacks["undo"]())
+        self.tree.bind("<Right>", lambda _: self._change_hierarchy("indent"))
+        self.tree.bind("<Left>", lambda _: self._change_hierarchy("outdent"))
         self.tree.bind("<Double-1>", lambda _: self.callbacks["open_file"]())
         self.empty = ttk.Frame(self.table_area, style="Card.TFrame", padding=14)
         ttk.Label(self.empty, text="Belge listeniz burada görünecek", style="Section.TLabel").pack(pady=(0, 8))
@@ -149,6 +158,16 @@ class DocumentsView(ttk.Frame):
                   style="CardMuted.TLabel").pack()
         self.empty.place(relx=0.5, rely=0.57, anchor="center")
         self._detail_bar(content)
+
+    def set_manual_hierarchy(self, enabled):
+        self.manual_hierarchy = bool(enabled)
+        columns = ("index", *self._data_columns) if enabled else self._data_columns
+        self.tree.configure(displaycolumns=columns)
+
+    def _change_hierarchy(self, direction):
+        if self.manual_hierarchy:
+            self.callbacks["hierarchy"](direction)
+            return "break"
 
     def _detail_bar(self, content):
         detail = ttk.Frame(content, style="Card.TFrame", padding=(14, 9))

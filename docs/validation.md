@@ -1,3 +1,26 @@
+# Verification record — 2026-11-06
+
+## Manual folder hierarchy
+
+- Full command: `/private/tmp/ot-client-review-venv/bin/python -B -m unittest discover -s tests -q`.
+- Final result: **380 tests; 379 passed, 1 skipped** (native Windows current-user DPAPI). Real Tk and loopback HTTP tests ran with native GUI/socket access. Initial restricted runs could not access macOS graphical services or bind the loopback test server.
+- Added 72 tests across the hierarchy model, persistence, worker/storage, and real Tk integration. They cover dynamic dotted indices, subtree and sibling-block moves, atomic invalid selections, promotion/removal/undo/re-added identities, filtering/busy guards, draft mode changes, all save routes, corrupted/stale hierarchy recovery, partial writes, selected-child downloads, ancestor caching/failure isolation, cancellation, nested matching and safe paths, related files, and filename collisions.
+- Independent model/persistence review approved the implementation. Final integration review found that unselected ancestors needing a candidate choice were missing from the choice-required filter. A regression reproduced the issue; the filter now includes candidate-bearing rows while preserving prior download history. The final complete suite above includes this fix.
+- All **35** Python/PYW files compile in memory and pass Python 3.10 grammar checks. Ruff `E9,F` and `git diff --check` pass. No dependencies changed.
+- Performance observations on this macOS/Python 3.11 environment: typical 10,000-entry model indexing median **3.67 ms**, two-subtree move **3.81 ms** (25 runs). A 10,000-row Tk table populated in **87 ms**; indent including widget updates median **79.3 ms** (5 runs, withdrawn window, excluding display painting/network/disk). These are local measurements, not cross-platform latency guarantees.
+- Existing workspace changes to the client and related-download tests were preserved. No existing downloaded files were moved or removed; list import/export formats and the public connector API remain unchanged.
+- Not executed: a live corporate OT connection or native Windows registry/DPAPI/junction/UI verification. Registry/secret and filesystem boundaries have injected tests; existing path-based concurrent-directory-replacement limitations remain.
+
+## Related forms and attachments
+
+- Full command: `/private/tmp/ot-client-review-venv/bin/python -B -m unittest discover -s tests -q`.
+- Result: **308 tests; 307 passed, 1 skipped** (native Windows current-user DPAPI). Real Tk and loopback HTTP tests ran outside the restricted sandbox; the initial restricted Tk run could not access the native graphical services.
+- Twenty new worker/client integration tests use synthetic HTTP responses and real temporary files. They cover all checkbox combinations; exact detail/media endpoints and ID encoding; parent folders and child naming metadata; absent/null/empty/malformed arrays; per-type deduplication; invalid metadata and Unicode; partial failures, retries, unchanged parents, shared children in distinct folders, filename collisions, primary failure, nonrecursive behavior, and cancellation cleanup.
+- Settings/UI regressions cover default-off and legacy values, strict boolean validation, independent persistence, both save routes, dirty state, and busy-state controls. Existing source-specific search/download and storage regressions remain green.
+- All **30** Python/PYW files compile in memory and pass Python 3.10 grammar checks. Ruff `E9,F` and `git diff --check` pass. No dependencies changed.
+- A read-only independent review found a malformed-Unicode child isolation issue. Focused regressions reproduced it; a scoped child error handler fixed it. Final review reported no remaining actionable findings.
+- Not executed: a live corporate OT connection or native Windows registry/DPAPI/filesystem/UI verification. Detail fixtures follow the specified root `properties` response shape; live server compatibility remains unverified.
+
 # Verification record — 2026-11-05
 
 ## Storage tab and document folders
