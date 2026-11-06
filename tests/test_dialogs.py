@@ -5,6 +5,7 @@ import sys
 import tempfile
 import traceback
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -45,6 +46,15 @@ class SettingsAndDialogTests(unittest.TestCase):
         from ot_app.settings_view import SettingsView
 
         view = SettingsView(self.host, settings or AppSettings(), on_save, on_test)
+        view.pack(fill="both", expand=True)
+        self.root.update()
+        return view
+
+    def _storage_view(self, settings=None, on_save=lambda: None):
+        from ot_app.settings import AppSettings
+        from ot_app.storage_view import StorageView
+
+        view = StorageView(self.host, settings or AppSettings(), on_save)
         view.pack(fill="both", expand=True)
         self.root.update()
         return view
@@ -143,29 +153,27 @@ class SettingsAndDialogTests(unittest.TestCase):
         self.root.update()
         self.assertAlmostEqual(view._canvas.yview()[0], 0.0)
 
-    def test_filename_format_tags_insert_at_cursor_and_replace_selection(self):
-        view = self._settings_view()
-        view.filename_format_var.set("{numara} - ")
-        view.filename_format_entry.icursor("end")
-        view.filename_tag_buttons["ad"].invoke()
-        self.assertEqual(view.read_settings().filename_format, "{numara} - {ad}")
-        self.assertIn("PR-001 - Kalite Prosedürü.pdf", view.filename_preview_var.get())
-        view.filename_format_entry.selection_range(0, 8)
-        view.filename_tag_buttons["revizyon"].invoke()
-        self.assertEqual(view.read_settings().filename_format, "{revizyon} - {ad}")
+    def test_typed_filename_format_updates_preview_and_busy_state(self):
+        view = self._storage_view()
+        view.filename_format_entry.delete(0, "end")
+        view.filename_format_entry.insert(0, "{numara} - {ad} - Rev{revizyon}")
+        self.assertEqual(view.read_settings().filename_format, "{numara} - {ad} - Rev{revizyon}")
+        self.assertIn("PR-001 - Kalite Prosedürü - Rev3.pdf", view.filename_preview_var.get())
         view.set_busy(True)
-        for button in view.filename_tag_buttons.values():
-            self.assertIn("disabled", button.state())
-        view.filename_tag_buttons["numara"].invoke()
-        self.assertEqual(view.filename_format_var.get(), "{revizyon} - {ad}")
+        self.assertIn("disabled", view.filename_format_entry.state())
+        view.set_busy(False)
+        self.assertNotIn("disabled", view.filename_format_entry.state())
 
     def test_invalid_filename_format_shows_inline_error_and_can_be_corrected(self):
+        from ot_app.settings import SettingsValidationError
+
         self.root.geometry("780x540")
-        view = self._settings_view()
+        view = self._storage_view()
         view.filename_format_var.set("{unknown}")
         self.assertIn("etiket", view.filename_preview_var.get().lower())
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SettingsValidationError) as caught:
             view.read_settings()
+        self.assertEqual(caught.exception.field, "filename_format")
         self.root.update()
         canvas_top = view._canvas.winfo_rooty()
         canvas_bottom = canvas_top + view._canvas.winfo_height()
@@ -174,6 +182,118 @@ class SettingsAndDialogTests(unittest.TestCase):
         view.filename_format_var.set("{numara} - Rev{revizyon}")
         self.assertIn("PR-001 - Rev3.pdf", view.filename_preview_var.get())
         self.assertEqual(view.read_settings().filename_format, "{numara} - Rev{revizyon}")
+
+    def test_connection_read_keeps_storage_values_from_current_base(self):
+        from ot_app.settings import AppSettings
+
+        original = AppSettings()
+        view = self._settings_view(original)
+        view.username_var.set("edited-account")
+        current = replace(original, output_dir="updated-folder", filename_format="{ad}")
+        merged = view.read_settings(current)
+        self.assertEqual(merged.username, "edited-account")
+        self.assertEqual(merged.output_dir, "updated-folder")
+        self.assertEqual(merged.filename_format, "{ad}")
+        self.assertEqual(current.username, original.username)
+
+    def test_storage_read_merges_only_its_values_and_saves_through_callback(self):
+        from ot_app.settings import AppSettings
+
+        original = AppSettings(output_dir="original-folder")
+        calls = []
+        view = self._storage_view(original, on_save=lambda: calls.append("save"))
+        self.assertEqual(view.read_settings(), original)
+        view.output_dir_var.set("  selected-folder  ")
+        view.document_subfolder_enabled_var.set(True)
+        view.document_subfolder_format_var.set("{numara} - {ad}")
+        view._folder_match_buttons[1].invoke()
+        current = replace(original, username="current-account", timeout=12.5)
+        merged = view.read_settings(current)
+        self.assertEqual(merged.username, "current-account")
+        self.assertEqual(merged.timeout, 12.5)
+        self.assertEqual(merged.output_dir, "selected-folder")
+        self.assertTrue(merged.document_subfolder_enabled)
+        self.assertEqual(merged.document_subfolder_format, "{numara} - {ad}")
+        self.assertEqual(merged.document_subfolder_match, "contains")
+        self.assertEqual(original.output_dir, "original-folder")
+        view.save_button.invoke()
+        self.assertEqual(calls, ["save"])
+        view.mark_saved()
+        self.assertEqual(view._status_kind, True)
+        view.output_dir_var.set("another-folder")
+        self.assertEqual(view._status_kind, None)
+
+    def test_typed_folder_format_preview_has_no_file_extension(self):
+        view = self._storage_view()
+        view.document_subfolder_enabled_var.set(True)
+        view.document_subfolder_format_entry.delete(0, "end")
+        view.document_subfolder_format_entry.insert(0, "{numara} - {ad} - Rev{revizyon}")
+        self.assertEqual(view.folder_preview_var.get(), "Örnek: PR-001 - Kalite Prosedürü - Rev3")
+        self.assertEqual(view.read_settings().document_subfolder_format,
+                         "{numara} - {ad} - Rev{revizyon}")
+
+    def test_disabled_folder_controls_keep_values_and_restore_after_busy(self):
+        view = self._storage_view()
+        self.assertIn("disabled", view.document_subfolder_format_entry.state())
+        for button in view._folder_match_buttons:
+            self.assertIn("disabled", button.state())
+        view.document_subfolder_enabled_button.invoke()
+        for widget in (view.document_subfolder_format_entry, *view._folder_match_buttons):
+            self.assertNotIn("disabled", widget.state())
+        view.document_subfolder_format_var.set("{unknown}")
+        view.document_subfolder_match_var.set("contains")
+        view.document_subfolder_enabled_var.set(False)
+        dormant = view.read_settings()
+        self.assertFalse(dormant.document_subfolder_enabled)
+        self.assertEqual(dormant.document_subfolder_format, "{unknown}")
+        self.assertEqual(dormant.document_subfolder_match, "contains")
+        view.set_busy(True)
+        for widget in (*view._editable, view.save_button):
+            self.assertIn("disabled", widget.state())
+        view.set_busy(False)
+        self.assertNotIn("disabled", view.output_dir_entry.state())
+        self.assertNotIn("disabled", view.save_button.state())
+        for widget in (view.document_subfolder_format_entry, *view._folder_match_buttons):
+            self.assertIn("disabled", widget.state())
+        view.document_subfolder_enabled_var.set(True)
+        self.assertNotIn("disabled", view.document_subfolder_format_entry.state())
+
+    def test_compact_storage_invalid_folder_is_revealed_and_footer_stays_visible(self):
+        from ot_app.settings import SettingsValidationError
+
+        self.root.geometry("780x540")
+        view = self._storage_view()
+        view.document_subfolder_enabled_var.set(True)
+        view.document_subfolder_format_var.set("../{numara}")
+        self.assertIn("format", view.folder_preview_var.get().lower())
+        with self.assertRaises(SettingsValidationError) as caught:
+            view.read_settings()
+        self.assertEqual(caught.exception.field, "document_subfolder_format")
+        self.root.update()
+        canvas_top = view._canvas.winfo_rooty()
+        canvas_bottom = canvas_top + view._canvas.winfo_height()
+        entry_top = view.document_subfolder_format_entry.winfo_rooty()
+        self.assertGreaterEqual(entry_top, canvas_top)
+        self.assertLessEqual(entry_top + view.document_subfolder_format_entry.winfo_height(), canvas_bottom)
+        self.assertLessEqual(view.save_button.winfo_rooty() + view.save_button.winfo_height(),
+                             view.winfo_rooty() + view.winfo_height())
+        view.document_subfolder_format_var.set("{numara}")
+        self.assertEqual(view.read_settings().document_subfolder_format, "{numara}")
+        view.focus_field("output_dir")
+        self.root.update()
+        self.assertGreaterEqual(view.output_dir_entry.winfo_rooty(), canvas_top)
+
+    def test_connection_validation_focus_opens_advanced_fields(self):
+        from ot_app.settings import SettingsValidationError
+
+        view = self._settings_view()
+        view.focus_field("ca_bundle")
+        self.root.update()
+        self.assertTrue(view._advanced_open)
+        view.timeout_var.set("invalid")
+        with self.assertRaises(SettingsValidationError) as caught:
+            view.read_settings()
+        self.assertEqual(caught.exception.field, "timeout")
 
     def test_bulk_accepts_unique_documents_and_return_remains_multiline(self):
         from ot_app.dialogs import BulkInputDialog

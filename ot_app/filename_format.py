@@ -1,4 +1,4 @@
-"""Validate and expand a small, literal document filename template language."""
+"""Validate and expand literal document filename and folder templates."""
 
 from __future__ import annotations
 
@@ -11,21 +11,40 @@ _TAG = re.compile(r"\{(numara|ad|revizyon)\}")
 _INVALID_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 
 
-def validate_filename_format(value: str) -> None:
-    """Reject paths, unknown tags and formatting expressions before saving."""
+def _validate_format(value: str, label: str) -> None:
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("Dosya adı formatını girin.")
+        raise ValueError(f"{label} formatını girin.")
     if len(value) > 256:
-        raise ValueError("Dosya adı formatı en fazla 256 karakter olabilir.")
+        raise ValueError(f"{label} formatı en fazla 256 karakter olabilir.")
     try:
         value.encode("utf-8")
     except UnicodeEncodeError:
-        raise ValueError("Dosya adı formatı geçerli Unicode metni olmalıdır.") from None
+        raise ValueError(f"{label} formatı geçerli Unicode metni olmalıdır.") from None
     if _INVALID_CHARACTERS.search(value):
-        raise ValueError('Dosya adı formatı yol ayırıcı, kontrol karakteri veya <>:"/\\|?* içeremez.')
+        raise ValueError(f'{label} formatı yol ayırıcı, kontrol karakteri veya <>:"/\\|?* içeremez.')
     remainder = _TAG.sub("", value)
     if "{" in remainder or "}" in remainder or not _TAG.search(value):
-        raise ValueError("Dosya adı formatında {numara}, {ad} veya {revizyon} etiketlerini kullanın.")
+        raise ValueError(f"{label} formatında {{numara}}, {{ad}} veya {{revizyon}} etiketlerini kullanın.")
+
+
+def validate_filename_format(value: str) -> None:
+    """Reject paths, unknown tags and formatting expressions before saving."""
+    _validate_format(value, "Dosya adı")
+
+
+def validate_folder_format(value: str) -> None:
+    """Accept one folder component using the same literal metadata tags."""
+    _validate_format(value, "Alt klasör adı")
+
+
+def _expand_metadata(value: str, document: Document, extension: str) -> str:
+    number = document.name[:-len(extension)] if extension else document.name
+    values = {
+        "numara": number,
+        "ad": document.title.strip() or number,
+        "revizyon": str(document.revision),
+    }
+    return _TAG.sub(lambda match: values[match.group(1)], value).strip()
 
 
 def format_document_filename(value: str, document: Document) -> str:
@@ -40,13 +59,17 @@ def format_document_filename(value: str, document: Document) -> str:
     if value.strip() == DEFAULT_FILENAME_FORMAT:
         return document.name
     extension = document_file_extension(document.name)
-    number = document.name[:-len(extension)] if extension else document.name
-    values = {
-        "numara": number,
-        "ad": document.title.strip() or number,
-        "revizyon": str(document.revision),
-    }
-    name = _TAG.sub(lambda match: values[match.group(1)], value).strip()
+    name = _expand_metadata(value, document, extension)
     if extension and not name.casefold().endswith(extension.casefold()):
         name += extension
     return name
+
+
+def format_document_folder(value: str, document: Document) -> str:
+    """Expand metadata once without appending the source file extension.
+
+    The storage resolver sanitizes the expanded component for Windows without a
+    document ID, so documents producing the same folder name can share it.
+    """
+    validate_folder_format(value)
+    return _expand_metadata(value, document, document_file_extension(document.name))

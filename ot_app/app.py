@@ -12,6 +12,7 @@ from .actions import DocumentActions
 from .queue_model import QueueRow
 from .settings import AppSettings, RegistryStore, SettingsError
 from .settings_view import SettingsView
+from .storage_view import StorageView
 from .theme import AMBER, BG, BLUE, MUTED, NAV, NAV_ACTIVE, RED, apply_theme, human_bytes
 from .views import DocumentsView, PROBLEMS, STATUS_LABELS, SUCCESS
 from .worker import DownloadWorker, JobItem, WorkerEvent, safe_error_message
@@ -81,7 +82,7 @@ class Application(DocumentActions, tk.Tk):
         tk.Label(self.sidebar, text="ÇALIŞMA ALANI", fg="#8195B1", bg=NAV,
                  font=(self.family, 8, "bold")).grid(row=1, column=0, sticky="w", padx=22, pady=(0, 12))
         self.nav_buttons = {}
-        for index, (name, label) in enumerate((("documents", "Belgeler"), ("settings", "Bağlantı / Ayarlar")), 2):
+        for index, (name, label) in enumerate((("documents", "Belgeler"), ("storage", "Depolama"), ("settings", "Bağlantı")), 2):
             button = tk.Button(self.sidebar, text=label, command=lambda value=name: self.show_view(value),
                                anchor="w", bg=NAV, fg="#CCD8E9", activebackground=NAV_ACTIVE,
                                activeforeground="white", relief="flat", borderwidth=0, padx=16, pady=13,
@@ -124,12 +125,14 @@ class Application(DocumentActions, tk.Tk):
         }
         self.documents_view = DocumentsView(self.content, callbacks)
         self.settings_view = SettingsView(self.content, self.settings, self.save_settings, self.test_connection)
-        for view in (self.documents_view, self.settings_view):
+        self.storage_view = StorageView(self.content, self.settings, self.save_settings)
+        self._views = {"documents": self.documents_view, "storage": self.storage_view, "settings": self.settings_view}
+        for view in self._views.values():
             view.grid(row=0, column=0, sticky="nsew")
 
     def show_view(self, name):
         self.current_view = name
-        (self.documents_view if name == "documents" else self.settings_view).tkraise()
+        self._views[name].tkraise()
         for key, button in self.nav_buttons.items():
             button.configure(bg=NAV_ACTIVE if key == name else NAV, fg="white" if key == name else "#CCD8E9",
                              font=(self.family, 10, "bold" if key == name else "normal"))
@@ -238,9 +241,28 @@ class Application(DocumentActions, tk.Tk):
             return False
 
     def read_settings(self, require_connection=False):
-        settings = self.settings_view.read_settings()
-        settings.validate(require_connection=require_connection)
+        try:
+            settings = self.settings_view.read_settings(self.settings)
+            settings = self.storage_view.read_settings(settings)
+            settings.validate(require_connection=require_connection)
+        except ValueError as error:
+            self._show_settings_error(error)
+            raise
         return settings
+
+    def _show_settings_error(self, error):
+        field = getattr(error, "field", "base_url")
+        storage_fields = {"output_dir", "filename_format", "document_subfolder_enabled",
+                          "document_subfolder_format", "document_subfolder_match"}
+        name = "storage" if field in storage_fields else "settings"
+        self.show_view(name)
+        view = self._views[name]
+        view.set_status(str(error), False)
+        view.focus_field(field)
+
+    def _mark_settings_saved(self):
+        self.settings_view.mark_saved()
+        self.storage_view.mark_saved()
 
     def save_settings(self):
         if self.busy:
@@ -249,13 +271,14 @@ class Application(DocumentActions, tk.Tk):
             settings = self.read_settings()
             self.store.save(settings, self.numbers() if self._documents_dirty else None)
         except (SettingsError, ValueError, OSError) as exc:
-            self.settings_view.set_connection_status(str(exc), False)
+            view = self.storage_view if self.current_view == "storage" else self.settings_view
+            view.set_status(str(exc), False)
             self.set_notice(f"Ayarlar kaydedilemedi: {exc}", "error")
             return False
         self.settings = settings
         self._last_saved_settings = replace(settings)
         self._documents_dirty = False
-        self.settings_view.mark_saved()
+        self._mark_settings_saved()
         self.refresh_settings_summary()
         warning = getattr(self.store, "warning", "")
         self.set_notice(warning or "Ayarlar kaydedildi.", "warning" if warning else "info")
@@ -272,21 +295,20 @@ class Application(DocumentActions, tk.Tk):
         self.busy = value
         self.documents_view.set_busy(value)
         self.settings_view.set_busy(value)
+        self.storage_view.set_busy(value)
         self.documents_view.refresh_actions(len(self.rows), len(self.selected_rows()))
 
     def _job_settings(self):
         try:
             settings = self.read_settings(require_connection=True)
         except ValueError as exc:
-            self.show_view("settings")
-            self.settings_view.set_connection_status(str(exc), False)
-            self.settings_view.focus_connection()
             self.set_notice(str(exc), "warning")
             return None
         try:
             self.store.save(settings, self.numbers() if self._documents_dirty else None)
             self._last_saved_settings = replace(settings)
             self._documents_dirty = False
+            self._mark_settings_saved()
         except (SettingsError, ValueError, OSError) as exc:
             self.set_notice(f"Ayarlar kaydedilemedi; bu işlemde girdiğiniz değerler kullanılacak. {exc}", "warning")
         self.settings = settings
@@ -438,10 +460,12 @@ class Application(DocumentActions, tk.Tk):
                 self._open_path(Path(selected[0].path))
 
     def open_output_folder(self):
+        directory = self.storage_view.output_dir_var.get().strip() or self.settings.output_dir
         try:
-            path = Path(self.settings_view.read_settings().output_dir).expanduser()
-        except ValueError:
-            path = Path(self.settings.output_dir).expanduser()
+            path = Path(directory).expanduser()
+        except (ValueError, RuntimeError):
+            self.set_notice("İndirme klasörü yolu okunamadı.", "warning")
+            return
         if not path.exists():
             self.set_notice("İndirme klasörü ilk indirmede oluşturulur.")
             return

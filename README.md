@@ -8,7 +8,7 @@ Windows için hafif belge arama ve indirme uygulaması. Mevcut OT istemcinizin u
 2. Bilgisayarda **Python 3.10 veya üzeri**, Tcl/Tk ve pip bulunmalıdır. Python 3.11+ kullanılabilir. Python yükleyicisinin Tcl/Tk seçeneğini açık bırakın.
 3. İlk kullanımda **Kurulum.cmd** dosyasını çalıştırın. Script önce Python 3.11'i, yoksa uygun Python 3 sürümünü bulur; uygulama klasöründe `.venv` oluşturur ve `requirements.txt` içindeki paketi kurar. Paket kurulumu için internet veya kurumunuzun Python paket deposuna erişim gerekir.
 4. **Baslat.cmd** ile uygulamayı açın. Sonraki açılışlarda kurulum tekrarlanmaz.
-5. **Bağlantı / Ayarlar** bölümünden sunucu adresini, kullanıcı adını, parolayı ve indirme klasörünü girin. Parola ve kullanıcı adı normal metin olarak girilir; önceden kodlamayın.
+5. **Bağlantı** sekmesinden sunucu adresini, kullanıcı adını ve parolayı girin; **Depolama** sekmesinden indirme klasörünü seçin. Parola ve kullanıcı adı normal metin olarak girilir; önceden kodlamayın.
 6. **Ayarları kaydet** ve **Bağlantıyı test et** düğmelerini kullanın. Giriş işlemi yanında belge arama servisinin erişimi de kontrol edilir.
 7. **Belgeler** ekranına dönün, belge numaralarını ekleyin ve **Listeyi indir** düğmesine basın.
 
@@ -84,6 +84,7 @@ Liste sınırları: 10.000 benzersiz numara, numara başına 1.024 karakter, top
 | Güncel | Gelen içerik ile yerel dosyanın SHA256 değeri aynı; dosya yeniden yazılmadı. |
 | Bulunamadı | Arama sonucu boş. |
 | Seçim gerekli | Birden fazla belirsiz sonuç bulundu. Satırı seçin, Eşleşmeyi seç ile doğru belgeyi belirleyin; ardından Seçileni indir kullanın. |
+| Klasör belirsiz | Birden fazla hedef alt klasör eşleştiği için belge indirilmeden atlandı. Klasör adlarını veya Depolama ayarlarını düzenleyip Sorunluları yeniden dene kullanın. |
 | Hata | Satırdaki açıklamayı kontrol edip yeniden deneyin. |
 | İptal edildi | Durdurma nedeniyle tamamlanmadı. |
 
@@ -101,11 +102,13 @@ HKEY_CURRENT_USER\Software\OTDesktop
 
 | Kayıt | Tür | İçerik |
 |---|---|---|
-| Settings | REG_SZ | Sunucu adresi, kullanıcı adı, hedef klasör, zaman aşımı, klasör kimliği, TLS/CA seçenekleri ve şifreli parola kaydının bağlantı eşleşmesi. Parola içermez. |
+| Settings | REG_SZ | Bağlantı bilgileri, indirme konumu, dosya/alt klasör adlandırma ve eşleştirme ayarları, TLS/CA seçenekleri ve şifreli parola kaydının bağlantı eşleşmesi. Parola içermez. |
 | Documents | REG_MULTI_SZ | Belge numaraları. |
 | Password | REG_BINARY | Windows DPAPI ile geçerli kullanıcı hesabına bağlı şifrelenmiş parola. |
 
 Belge listesi değişiklikleri kısa bir gecikmeyle otomatik kaydedilir. Ayarlar Kaydet, Bağlantıyı test et ve indirme başlatılırken kaydedilir; geçerli ve değiştirilmiş ayarlar normal kapanışta da saklanır. Kayıt hataları görünür kalır. Okunamamış fakat değiştirilmemiş belge listesi, ayar kaydında veya kapanışta boş listeyle değiştirilmez.
+
+Sekme sırası **Belgeler → Depolama → Bağlantı** şeklindedir. Her iki ayar sekmesindeki **Ayarları kaydet** düğmesi iki sekmenin düzenlemelerini birlikte kaydeder. Sekme değiştirmek girilen değerleri silmez.
 
 Parolayı hatırla seçeneğini kapatıp kaydederseniz saklanan parola silinir. Hatırlama açıkken parola alanını boş bırakmak eski şifreli kaydı korur; parolayı kaldırmak için seçeneği kapatın. Kayıtlı parola yalnızca ilişkili sunucu ve kullanıcıyla kullanılabilir. Sunucu/kullanıcı değişirse, yapılandırma bozulursa veya parola yazımı yarıda kalırsa parola yeniden istenir; şifreli kayıt silinmez. Eski kayıt biçimi okunmaya devam eder; yeni kayıtlarda bağlantı bilgileri ve şifreli verinin SHA256 değeri ek metadata olarak tutulur. Bu değer düz metin parolanın özeti değildir. Kayıt defterine düz metin parola veya Base64 yazılmaz. DPAPI bir erişim izni sistemi değildir: sizin Windows oturumunuzdaki uygulamalara karşı ayrı bir güvenlik sınırı oluşturmaz. Şifreli değeri başka bir bilgisayara/kullanıcıya taşımak genellikle işe yaramaz; o ortamda parolayı yeniden girin.
 
@@ -113,9 +116,9 @@ Windows dışında uygulama test/geliştirme amacıyla açılabilir; kayıt deft
 
 ### İndirilen dosyaların adı
 
-Ayarlar → İndirme konumu bölümündeki **İndirilen dosyanın adı** alanında etiketlerle
-dosya adını belirleyebilirsiniz. Etiket düğmeleri imlecin bulunduğu yere ekleme yapar
-veya seçili metni değiştirir. Örnek dosya adı yazarken güncellenir.
+Depolama sekmesindeki **İndirilen dosyanın adı** alanında etiketlerle
+dosya adını belirleyebilirsiniz. Etiketleri doğrudan bu alana yazın.
+Örnek dosya adı yazarken güncellenir.
 
 | Etiket | Değer |
 |---|---|
@@ -132,8 +135,19 @@ indirmelere uygulanır; önceden indirilen dosyalar yeniden adlandırılmaz.
 En az bir etiket kullanın. Bilinmeyen etiketler, yol ayırıcıları ve geçersiz dosya
 adı karakterleri kaydetmeden önce bildirilir. Belge bilgilerindeki geçersiz
 karakterler mevcut güvenli adlandırma kurallarıyla temizlenir. Farklı belgeler aynı
-adı üretirse aynı işlemde önceki dosyanın üzerine yazılmaz; formatınıza belge
+klasörde aynı adı üretirse aynı işlemde önceki dosyanın üzerine yazılmaz; formatınıza belge
 numarasını ekleyebilir veya ayrı bir hedef klasör seçebilirsiniz.
+
+### Belgeye özel klasörler
+
+Depolama sekmesinde **Her belgeyi özel bir klasöre kaydet** seçeneği varsayılan olarak kapalıdır; dosyalar doğrudan indirme klasörüne kaydedilir. Açıldığında **Klasör adı formatı** alanında aynı `{numara}`, `{ad}` ve `{revizyon}` etiketlerini kullanabilirsiniz. Varsayılan `{numara}` formatı `PR-001.pdf` için `PR-001` klasörünü oluşturur; klasör adına otomatik dosya uzantısı eklenmez. Önizleme yazarken güncellenir. Seçenek kapatılırsa girilen format korunur ve kullanılmaz.
+
+- **Birebir eşleşme:** Aynı adlı alt klasör kullanılır; yoksa oluşturulur. Varsayılan seçenektir.
+- **İçerme:** Üretilen adı içeren alt klasör kullanılabilir; örneğin `PR-001` için `PR-001 Kalite`. Tam eşleşme varsa önceliklidir. Tek eşleşme kullanılır, hiç yoksa üretilen adla klasör oluşturulur.
+
+Arama büyük/küçük harf ayrımı olmadan yalnızca doğrudan alt klasörlerde yapılır. Birden fazla aday kalırsa bu belge **Klasör belirsiz** uyarısıyla atlanır, diğer belgeler işlenir. Klasör yerine aynı adlı dosya bulunması veya eşleşen bir bağlantının indirme kökü dışına çıkması hata olarak gösterilir. Farklı belgeler aynı klasörü paylaşabilir; aynı dosya adının farklı klasörlerde kullanılması mümkündür.
+
+Dosya güncelleme davranışı değişmez: mevcut dosyayla içerik aynıysa yeniden yazılmaz, farklıysa tamamlanan indirme atomik olarak onun yerini alır. Yeni bir üzerine yazma/atlama ayarı yoktur. Önceden indirilmiş dosyalar taşınmaz.
 
 ### Gelişmiş ayarlar
 
@@ -202,12 +216,13 @@ Ardından `Baslat.cmd` çalıştırılabilir. Kurumunuzun paket deposu varsa onu
 
 ## Doğrulama
 
-5 Kasım 2026 adlandırma ve tablo hizalama güncellemesinde **212 test çalıştırıldı: 211 geçti, 1 test atlandı**. Testler macOS üzerinde Python 3.11.15, requests 2.34.2 ve gerçek Tk 9.0.4 pencereleriyle çalıştırıldı.
+5 Kasım 2026 Depolama güncellemesinde **265 test çalıştırıldı: 264 geçti, 1 test atlandı**. Testler macOS üzerinde Python 3.11.15, requests 2.34.2 ve gerçek Tk 9.0.4 pencereleriyle çalıştırıldı.
 
 - Gerçek yerel HTTP sunucusu ve sahte taşıyıcı testleri: giriş, çerez, iptal, kesilmiş/yanlış kodlanmış yanıt ve mevcut dosyanın korunması.
 - Kayıt defteri/DPAPI sınır testleri: bozuk kayıt, kısmi yazma, bağlantı kimliği ile parola eşleşmesi ve kuyruk koruma.
 - Gerçek Tk testleri: belge ekleme, seçim, filtre, silme/geri alma, indirme, kapanış, ayarlar ve modal pencereler.
-- Dosya adı formatı: etiket ekleme/değiştirme, canlı önizleme, kayıt, eski ayar uyumluluğu, uzantı ve çakışma koruması. Özel adlar JSON/HTML servis yanıtlarını belge olarak kabul ettirmez.
+- Dosya adı formatı: etiketleri doğrudan yazma, canlı önizleme, kayıt, eski ayar uyumluluğu, uzantı ve çakışma koruması. Özel adlar JSON/HTML servis yanıtlarını belge olarak kabul ettirmez.
+- Depolama: belge klasörleri, birebir/içerme eşleşmesi, belirsizlikte atlama, güvenli hedefler, sekmeler arası taslak/kayıt ve klasör bazlı dosya çakışmaları.
 - İçe/dışa aktarım, CSV formül koruması ve rapor yazma hatasında eski dosyanın korunması.
 - Python 3.10 sözdizimi/derleme ve Ruff `E9,F` kontrolleri geçti. Bağımlılık denetimi bilinen açık bildirmedi.
 

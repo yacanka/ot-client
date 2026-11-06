@@ -404,6 +404,147 @@ class DownloadWorkerTests(unittest.TestCase):
         worker.run()
         self.assertTrue((Path(self.temporary.name) / "ABC_R0.pdf").is_file())
 
+    def test_disabled_document_folder_preserves_destination_and_ignores_dormant_format(self):
+        self.settings.document_subfolder_format = "../invalid"
+        self.make_worker([JobItem("1", "ABC", document())]).run()
+        events = self.collect()
+        self.assertEqual(self.client.downloads[0]["folder_path"], self.temporary.name)
+        self.assertEqual(self.client.downloads[0]["source_name"], None)
+        self.assertEqual((Path(self.temporary.name) / "ABC.pdf").read_bytes(), b"document 1")
+        self.assertEqual(self.statuses(events), ["downloading", "downloaded"])
+
+    def test_document_folders_apply_to_searched_and_explicit_documents_with_filename_format(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_format = "{ad} - R{revizyon}"
+        self.settings.filename_format = "{numara}_{revizyon}"
+        first = Document("1", "PR-001.pdf", "Quality", "", 4)
+        second = Document("2", "PR-002.pdf", "Workflow", "", 0)
+        self.client.results["PR-001"] = [first]
+        self.make_worker([JobItem("1", "PR-001"), JobItem("2", "query", second)]).run()
+        root = Path(self.temporary.name)
+        self.assertEqual((root / "Quality - R4" / "PR-001_4.pdf").read_bytes(), b"document 1")
+        self.assertEqual((root / "Workflow - R0" / "PR-002_0.pdf").read_bytes(), b"document 2")
+        self.assertEqual([call["source_name"] for call in self.client.downloads], ["PR-001.pdf", "PR-002.pdf"])
+        self.assertFalse(any(event.kind == "fatal" for event in self.collect()))
+
+    def test_document_folder_contains_reuses_existing_directory(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_match = "contains"
+        existing = Path(self.temporary.name) / "old abc approved"
+        existing.mkdir()
+        self.make_worker([JobItem("1", "ABC", document())]).run()
+        self.assertEqual((existing / "ABC.pdf").read_bytes(), b"document 1")
+        self.assertEqual(self.client.downloads[0]["source_name"], None)
+        self.assertEqual(list(Path(self.temporary.name).iterdir()), [existing])
+
+    def test_document_folder_exact_match_wins_over_partial_directories(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_match = "contains"
+        root = Path(self.temporary.name)
+        for name in ("abc", "old ABC", "ABC approved"):
+            (root / name).mkdir()
+        self.make_worker([JobItem("1", "ABC", document())]).run()
+        self.assertEqual((root / "abc" / "ABC.pdf").read_bytes(), b"document 1")
+        self.assertEqual(list((root / "old ABC").iterdir()), [])
+        self.assertEqual(list((root / "ABC approved").iterdir()), [])
+
+    def test_folder_ambiguity_clears_stale_path_keeps_selection_and_continues_batch(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_match = "contains"
+        root = Path(self.temporary.name)
+        for name in ("old ABC", "ABC approved"):
+            (root / name).mkdir()
+        selected = document()
+        self.client.results["ABC"] = [selected]
+        self.make_worker([
+            JobItem("1", "ABC"), JobItem("2", "DEF", document("2", "DEF.pdf"))
+        ]).run()
+        events = self.collect()
+        skipped = next(event for event in events if event.kind == "status"
+                       and event.payload["status"] == "folder_ambiguous")
+        self.assertEqual(skipped.payload["document"], selected)
+        self.assertEqual(skipped.payload["path"], "")
+        self.assertNotIn("candidates", skipped.payload)
+        self.assertEqual(self.statuses(events, "1"), ["searching", "folder_ambiguous"])
+        self.assertEqual(self.statuses(events, "2"), ["downloading", "downloaded"])
+        self.assertEqual([call["id"] for call in self.client.downloads], ["2"])
+        self.assertFalse((root / "ABC").exists())
+        self.assertFalse(any(event.kind == "fatal" for event in events))
+        self.assertEqual(self.finished(events)["processed"], 2)
+        self.assertEqual(self.client.close_calls, 1)
+
+    def test_same_filename_in_separate_document_folders_can_download(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.filename_format = "{ad}"
+        items = [
+            JobItem("1", "ABC", Document("1", "ABC.pdf", "Shared", "", 0)),
+            JobItem("2", "DEF", Document("2", "DEF.pdf", "Shared", "", 0)),
+        ]
+        self.make_worker(items).run()
+        root = Path(self.temporary.name)
+        self.assertEqual((root / "ABC" / "Shared.pdf").read_bytes(), b"document 1")
+        self.assertEqual((root / "DEF" / "Shared.pdf").read_bytes(), b"document 2")
+        self.assertEqual(self.statuses(self.collect()), ["downloading", "downloaded"] * 2)
+
+    def test_same_filename_in_shared_document_folder_preserves_first_download(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_format = "{ad}"
+        items = [
+            JobItem("1", "ABC", Document("1", "Same.pdf", "Shared", "", 0)),
+            JobItem("2", "DEF", Document("2", "same.PDF", "shared", "", 0)),
+        ]
+        self.make_worker(items, force=True).run()
+        events = self.collect()
+        self.assertEqual((Path(self.temporary.name) / "Shared" / "Same.pdf").read_bytes(), b"document 1")
+        self.assertEqual(len(self.client.downloads), 1)
+        self.assertEqual(self.statuses(events, "2"), ["error"])
+
+    def test_folder_aliases_share_filename_ownership_by_resolved_destination(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_format = "{ad}"
+        root = Path(self.temporary.name)
+        target = root / "Shared"
+        target.mkdir()
+        (root / "Alias").symlink_to(target, target_is_directory=True)
+        self.make_worker([
+            JobItem("1", "ABC", Document("1", "Same.pdf", "Shared", "", 0)),
+            JobItem("2", "DEF", Document("2", "same.PDF", "Alias", "", 0)),
+        ]).run()
+        self.assertEqual((target / "Same.pdf").read_bytes(), b"document 1")
+        self.assertEqual(len(self.client.downloads), 1)
+        self.assertEqual(self.statuses(self.collect(), "2"), ["error"])
+
+    def test_unsafe_folder_link_is_recoverable_without_downloading_outside_root(self):
+        self.settings.document_subfolder_enabled = True
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        root = Path(self.temporary.name)
+        (root / "ABC").symlink_to(outside.name, target_is_directory=True)
+        self.make_worker([
+            JobItem("1", "ABC", document()),
+            JobItem("2", "DEF", document("2", "DEF.pdf")),
+        ]).run()
+        events = self.collect()
+        self.assertEqual(self.statuses(events, "1"), ["error"])
+        self.assertEqual(self.statuses(events, "2"), ["downloading", "downloaded"])
+        self.assertEqual(list(Path(outside.name).iterdir()), [])
+        self.assertEqual([call["id"] for call in self.client.downloads], ["2"])
+        self.assertEqual(self.finished(events)["processed"], 2)
+        self.assertEqual(self.client.close_calls, 1)
+
+    def test_subfolder_settings_are_snapshotted_at_worker_creation(self):
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_format = "{numara}_R{revizyon}"
+        self.settings.document_subfolder_match = "contains"
+        existing = Path(self.temporary.name) / "old ABC_R0"
+        existing.mkdir()
+        worker = self.make_worker([JobItem("1", "ABC", document())])
+        self.settings.document_subfolder_enabled = False
+        self.settings.document_subfolder_format = "{ad}"
+        self.settings.document_subfolder_match = "exact"
+        worker.run()
+        self.assertEqual((existing / "ABC.pdf").read_bytes(), b"document 1")
+
     def test_collision_check_is_case_insensitive_for_windows(self):
         items = [
             JobItem("1", "ABC", document("1", "Same.pdf")),

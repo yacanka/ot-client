@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .documents import MAX_DOCUMENTS, MAX_INPUT_CHARACTERS, merge_document_numbers
-from .filename_format import DEFAULT_FILENAME_FORMAT, validate_filename_format
+from .filename_format import DEFAULT_FILENAME_FORMAT, validate_filename_format, validate_folder_format
 from .win_secrets import DPAPIProtector, MAX_SECRET_BYTES
 
 REGISTRY_PATH = r"Software\OTDesktop"
@@ -32,6 +32,14 @@ _MISSING = object()
 
 class SettingsError(RuntimeError):
     """Persistent settings could not be safely saved."""
+
+
+class SettingsValidationError(ValueError):
+    """Invalid setting, with its field name for routing focus to the right page."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
 
 
 def _default_output_directory() -> str:
@@ -50,6 +58,9 @@ class AppSettings:
     verify_tls: bool = True
     remember_password: bool = True
     filename_format: str = DEFAULT_FILENAME_FORMAT
+    document_subfolder_enabled: bool = False
+    document_subfolder_format: str = "{numara}"
+    document_subfolder_match: str = "exact"
 
     @property
     def tls_verify(self) -> bool | str:
@@ -63,30 +74,31 @@ class AppSettings:
             "base_url": "Sunucu adresi", "username": "Kullanıcı adı",
             "password": "Parola", "output_dir": "İndirme klasörü",
             "folder_id": "Klasör kimliği", "ca_bundle": "CA sertifika dosyası",
+            "document_subfolder_format": "Klasör adı formatı",
         }
         for name, label in labels.items():
             value = getattr(self, name)
             if not isinstance(value, str):
-                raise ValueError(f"{label} metin olmalıdır.")
+                raise SettingsValidationError(name, f"{label} metin olmalıdır.")
             if "\x00" in value:
-                raise ValueError(f"{label} NUL karakteri içeremez.")
+                raise SettingsValidationError(name, f"{label} NUL karakteri içeremez.")
             try:
                 encoded = value.encode("utf-8")
             except UnicodeEncodeError:
-                raise ValueError(f"{label} geçerli Unicode metni olmalıdır.") from None
+                raise SettingsValidationError(name, f"{label} geçerli Unicode metni olmalıdır.") from None
             if len(encoded) > MAX_SECRET_BYTES:
-                raise ValueError(f"{label} izin verilen boyutu aşıyor.")
-        for name in ("verify_tls", "remember_password"):
+                raise SettingsValidationError(name, f"{label} izin verilen boyutu aşıyor.")
+        for name in ("verify_tls", "remember_password", "document_subfolder_enabled"):
             if type(getattr(self, name)) is not bool:
-                raise ValueError("TLS doğrulama ve parola hatırlama seçenekleri açık veya kapalı olmalıdır.")
+                raise SettingsValidationError(name, "Seçenek açık veya kapalı olmalıdır.")
         if isinstance(self.timeout, bool) or not isinstance(self.timeout, (int, float)):
-            raise ValueError("Zaman aşımı saniye cinsinden bir sayı olmalıdır.")
+            raise SettingsValidationError("timeout", "Zaman aşımı saniye cinsinden bir sayı olmalıdır.")
         try:
             valid_timeout = math.isfinite(self.timeout) and 0 < self.timeout <= 3600
         except OverflowError:
             valid_timeout = False
         if not valid_timeout:
-            raise ValueError("Zaman aşımı sıfırdan büyük ve en fazla 3600 saniye olmalıdır.")
+            raise SettingsValidationError("timeout", "Zaman aşımı sıfırdan büyük ve en fazla 3600 saniye olmalıdır.")
         base_url = self.base_url.strip()
         if base_url:
             try:
@@ -104,25 +116,41 @@ class AppSettings:
             except ValueError:
                 invalid = True
             if invalid:
-                raise ValueError("Sunucu adresi geçerli bir HTTP/HTTPS adresi olmalı; kullanıcı bilgisi, sorgu veya # içermemelidir.")
+                raise SettingsValidationError("base_url", "Sunucu adresi geçerli bir HTTP/HTTPS adresi olmalı; kullanıcı bilgisi, sorgu veya # içermemelidir.")
         if not self.output_dir.strip():
-            raise ValueError("İndirme klasörünü seçin.")
-        validate_filename_format(self.filename_format)
+            raise SettingsValidationError("output_dir", "İndirme klasörünü seçin.")
+        try:
+            validate_filename_format(self.filename_format)
+        except ValueError as error:
+            raise SettingsValidationError("filename_format", str(error)) from None
+        if self.document_subfolder_match not in ("exact", "contains"):
+            raise SettingsValidationError("document_subfolder_match", "Klasör eşleşmesi birebir veya içerme olmalıdır.")
+        if self.document_subfolder_enabled:
+            try:
+                validate_folder_format(self.document_subfolder_format)
+            except ValueError as error:
+                raise SettingsValidationError("document_subfolder_format", str(error)) from None
+        self._validate_paths()
+        if require_connection:
+            for name, message in (("base_url", "Sunucu adresini girin."),
+                                  ("username", "Kullanıcı adını girin."),
+                                  ("password", "Parolayı girin.")):
+                value = getattr(self, name)
+                if not (value if name == "password" else value.strip()):
+                    raise SettingsValidationError(name, message)
+
+    def _validate_paths(self) -> None:
         try:
             output_path = Path(self.output_dir).expanduser()
             if output_path.exists() and not output_path.is_dir():
-                raise ValueError("İndirme yolu bir klasör olmalıdır.")
-            if self.verify_tls and self.ca_bundle.strip() and not Path(self.ca_bundle).expanduser().is_file():
-                raise ValueError("CA sertifika dosyası bulunamadı veya bir dosya değil.")
+                raise SettingsValidationError("output_dir", "İndirme yolu bir klasör olmalıdır.")
         except (OSError, RuntimeError):
-            raise ValueError("İndirme klasörü veya CA sertifika dosyası yolu okunamadı.") from None
-        if require_connection:
-            if not base_url:
-                raise ValueError("Sunucu adresini girin.")
-            if not self.username.strip():
-                raise ValueError("Kullanıcı adını girin.")
-            if not self.password:
-                raise ValueError("Parolayı girin.")
+            raise SettingsValidationError("output_dir", "İndirme klasörü yolu okunamadı.") from None
+        try:
+            if self.verify_tls and self.ca_bundle.strip() and not Path(self.ca_bundle).expanduser().is_file():
+                raise SettingsValidationError("ca_bundle", "CA sertifika dosyası bulunamadı veya bir dosya değil.")
+        except (OSError, RuntimeError):
+            raise SettingsValidationError("ca_bundle", "CA sertifika dosyası yolu okunamadı.") from None
 
 
 _CONFIG_FIELDS = tuple(item.name for item in fields(AppSettings) if item.name != "password")

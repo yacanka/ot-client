@@ -2,6 +2,20 @@
 import sys
 
 
+def import_error_message(error):
+    missing = (getattr(error, "name", None) or "").split(".")[0].casefold()
+    if missing in {"otclient", "ot_app"}:
+        return (
+            "Uygulama dosyaları eksik veya farklı sürümlere ait. "
+            "ot_desktop.pyw, otClient.py ve ot_app klasörünü aynı sürümden birlikte güncelleyin. "
+            "ZIP kullanıyorsanız tamamını yeni bir klasöre çıkarın; yalnızca pyw dosyasını taşımayın."
+        )
+    return (
+        "Gerekli bir Python bileşeni yüklenemedi. Önce Kurulum.cmd dosyasını çalıştırın, "
+        "ardından Baslat.cmd ile açın. pyw dosyasına çift tıklamak farklı bir Python ortamı kullanabilir."
+    )
+
+
 def startup_error(message):
     try:
         import tkinter as tk
@@ -25,7 +39,7 @@ if __name__ == "__main__":
     try:
         from ot_app.app import main
     except ImportError as error:
-        startup_error("Gerekli bir Python bileşeni bulunamadı. Önce Kurulum.cmd dosyasını çalıştırın.\n\n" + str(error))
+        startup_error(import_error_message(error))
         sys.exit(1)
     try:
         main()

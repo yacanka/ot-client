@@ -9,9 +9,10 @@ STATUS_LABELS = {
     "downloaded": "İndirildi", "updated": "Güncellendi", "unchanged": "Güncel",
     "not_found": "Bulunamadı", "ambiguous": "Seçim gerekli", "error": "Hata",
     "cancelled": "İptal edildi",
+    "folder_ambiguous": "Klasör belirsiz",
 }
 SUCCESS = {"downloaded", "updated", "unchanged"}
-PROBLEMS = {"error", "not_found", "ambiguous", "cancelled"}
+PROBLEMS = {"error", "not_found", "ambiguous", "folder_ambiguous", "cancelled"}
 
 
 class DocumentsView(ttk.Frame):
@@ -134,7 +135,7 @@ class DocumentsView(ttk.Frame):
         scroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll.set)
         for state in STATUS_LABELS:
-            color = GREEN if state in SUCCESS else RED if state == "error" else AMBER if state in {"not_found", "ambiguous"} else BLUE if state in {"searching", "downloading"} else MUTED
+            color = GREEN if state in SUCCESS else RED if state == "error" else AMBER if state in {"not_found", "ambiguous", "folder_ambiguous"} else BLUE if state in {"searching", "downloading"} else MUTED
             self.tree.tag_configure(state, foreground=color)
         self.tree.bind("<<TreeviewSelect>>", lambda _: self.callbacks["selection"]())
         self.tree.bind("<Delete>", lambda _: self.callbacks["remove"]())

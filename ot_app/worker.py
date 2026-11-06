@@ -10,6 +10,7 @@ event, but do not increase that count.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 import queue
 import threading
 import time
@@ -25,6 +26,7 @@ from otClient import (
 
 from .filename_format import DEFAULT_FILENAME_FORMAT, format_document_filename
 from .settings import AppSettings
+from .storage import FolderAmbiguityError, resolve_document_folder
 
 
 def safe_error_message(error: Exception, password: str = "") -> str:
@@ -157,7 +159,7 @@ class DownloadWorker(threading.Thread):
         for item in items:
             self._status(item, "cancelled", "İşlem başlamadan iptal edildi.")
 
-    def _process_item(self, connector, item: JobItem, filenames: dict[str, str]) -> None:
+    def _process_item(self, connector, item: JobItem, filenames: dict[tuple[str, str], str]) -> None:
         selected = item.document
         if selected is None:
             self._status(item, "searching", "Belge aranıyor…")
@@ -178,10 +180,26 @@ class DownloadWorker(threading.Thread):
                 return
 
         self._check_cancelled()
+        output_dir: str | Path = self._settings.output_dir
+        if self._settings.document_subfolder_enabled:
+            try:
+                output_dir = resolve_document_folder(
+                    output_dir,
+                    selected,
+                    self._settings.document_subfolder_format,
+                    self._settings.document_subfolder_match,
+                )
+            except FolderAmbiguityError as error:
+                self._status(
+                    item, "folder_ambiguous", self._message(error),
+                    document=selected, path="",
+                )
+                return
+        self._check_cancelled()
         file_name = format_document_filename(self._settings.filename_format, selected)
         source_name = selected.name if self._settings.filename_format.strip() != DEFAULT_FILENAME_FORMAT else None
         target_name = safe_windows_filename(file_name, selected.id)
-        normalized = target_name.casefold()
+        normalized = (str(Path(output_dir).expanduser().resolve()).casefold(), target_name.casefold())
         document_id = str(selected.id)
         owner = filenames.get(normalized)
         if owner is not None and owner != document_id:
@@ -201,7 +219,7 @@ class DownloadWorker(threading.Thread):
         try:
             result = connector.download_document(
                 selected.id,
-                self._settings.output_dir,
+                output_dir,
                 file_name=file_name,
                 source_name=source_name,
                 overwrite=self._force,
@@ -233,7 +251,7 @@ class DownloadWorker(threading.Thread):
         total = len(self._items)
         cancelled = False
         fatal_reported = False
-        filenames: dict[str, str] = {}
+        filenames: dict[tuple[str, str], str] = {}
         self._emit("advance", done=0, total=total)
         try:
             if not total:

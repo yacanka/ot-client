@@ -3,7 +3,12 @@
 import unittest
 
 from otClient import Document, safe_windows_filename
-from ot_app.filename_format import format_document_filename, validate_filename_format
+from ot_app.filename_format import (
+    format_document_filename,
+    format_document_folder,
+    validate_filename_format,
+    validate_folder_format,
+)
 
 
 class FilenameFormatTests(unittest.TestCase):
@@ -60,6 +65,41 @@ class FilenameFormatTests(unittest.TestCase):
                       "{ad}\x7f", "{ad}\ud800", "x" * 257 + "{ad}"):
             with self.subTest(value=repr(value)), self.assertRaises(ValueError):
                 validate_filename_format(value)
+
+
+class FolderFormatTests(unittest.TestCase):
+    def test_folder_number_strips_only_known_source_extension(self):
+        for number, expected in (
+            ("PR.001.pdf", "PR.001"), ("PR.001", "PR.001"),
+            ("Report.PDF", "Report"), ("manual.pdf.pdf", "manual.pdf"),
+        ):
+            with self.subTest(number=number):
+                self.assertEqual(
+                    format_document_folder("{numara}", Document("id", number, "Title", "", 0)),
+                    expected,
+                )
+
+    def test_folder_expands_repeated_tags_without_appending_an_extension(self):
+        selected = Document("id", "PR.001.pdf", "Kalite Prosedürü", "", 3)
+        self.assertEqual(
+            format_document_folder(" {ad} - {numara} - R{revizyon}_{revizyon} ", selected),
+            "Kalite Prosedürü - PR.001 - R3_3",
+        )
+
+    def test_folder_title_falls_back_to_number_and_metadata_remains_literal(self):
+        for title, expected in ((" ", "PR.001"), ("{numara}:test", "{numara}:test")):
+            with self.subTest(title=title):
+                selected = Document("id", "PR.001.pdf", title, "", 0)
+                self.assertEqual(format_document_folder("{ad}", selected), expected)
+
+    def test_folder_format_rejects_paths_controls_and_formatting_expressions(self):
+        for value in (
+            "", " ", None, 1, "literal", "../{ad}", "C:\\{ad}", "{ad}\n",
+            "{ad}\x00", "{ad}\x7f", "{ad}\ud800", "x" * 257 + "{ad}",
+            "{title}", "{{ad}}", "{ad!r}", "{revizyon:02d}", "{ad.__class__}",
+        ):
+            with self.subTest(value=repr(value)), self.assertRaises(ValueError):
+                validate_folder_format(value)
 
 
 if __name__ == "__main__":

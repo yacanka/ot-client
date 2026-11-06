@@ -72,6 +72,44 @@ class FakeProtector:
 
 
 class AppSettingsTests(unittest.TestCase):
+    def test_subfolder_defaults_preserve_flat_downloads(self):
+        settings = AppSettings()
+        self.assertFalse(getattr(settings, "document_subfolder_enabled", None))
+        self.assertEqual(getattr(settings, "document_subfolder_format", None), "{numara}")
+        self.assertEqual(getattr(settings, "document_subfolder_match", None), "exact")
+
+    def test_subfolder_validation_identifies_the_invalid_field(self):
+        for field, value in (
+            ("document_subfolder_enabled", "false"),
+            ("document_subfolder_format", "../{ad}"),
+            ("document_subfolder_format", None),
+            ("document_subfolder_match", "first"),
+            ("document_subfolder_match", []),
+        ):
+            with self.subTest(field=field, value=value):
+                settings = AppSettings()
+                settings.document_subfolder_enabled = True
+                setattr(settings, field, value)
+                with self.assertRaises(ValueError) as caught:
+                    settings.validate()
+                self.assertEqual(caught.exception.field, field)
+
+    def test_disabled_subfolder_retains_unfinished_template(self):
+        settings = AppSettings()
+        settings.document_subfolder_format = "{unfinished"
+        settings.validate()
+        settings.document_subfolder_enabled = True
+        with self.assertRaises(ValueError):
+            settings.validate()
+
+    def test_validation_errors_identify_connection_and_storage_fields(self):
+        for field, value in (("output_dir", ""), ("filename_format", "{unknown}"),
+                             ("timeout", 0), ("base_url", "invalid")):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError) as caught:
+                    AppSettings(**{field: value}).validate()
+                self.assertEqual(getattr(caught.exception, "field", None), field)
+
     def test_defaults_allow_setup_and_password_is_hidden_in_repr(self):
         settings = AppSettings(password="never-print-this")
         settings.validate()
@@ -146,6 +184,30 @@ class RegistryStoreTests(unittest.TestCase):
         self.assertEqual(settings.base_url, "")
         self.assertEqual(numbers, [])
         self.assertEqual(self.store.warning, "")
+
+    def test_subfolder_settings_roundtrip_and_legacy_defaults(self):
+        self.registry.values[SETTINGS_VALUE] = (json.dumps({"username": "legacy"}), REG_SZ)
+        legacy, _ = self.store.load()
+        self.assertEqual(getattr(legacy, "document_subfolder_match", None), "exact")
+        self.assertFalse(legacy.document_subfolder_enabled)
+        settings = replace(self.settings, document_subfolder_enabled=True,
+                           document_subfolder_format="{numara} - {ad}",
+                           document_subfolder_match="contains")
+        self.store.save(settings)
+        restored, _ = self.store.load()
+        self.assertEqual(restored, settings)
+
+    def test_corrupt_subfolder_fields_recover_without_losing_other_settings(self):
+        self.registry.values[SETTINGS_VALUE] = (json.dumps({
+            "username": "saved-user", "document_subfolder_enabled": True,
+            "document_subfolder_format": "../{ad}", "document_subfolder_match": "first",
+        }), REG_SZ)
+        restored, _ = self.store.load()
+        self.assertEqual(getattr(restored, "document_subfolder_format", None), "{numara}")
+        self.assertTrue(restored.document_subfolder_enabled)
+        self.assertEqual(restored.document_subfolder_match, "exact")
+        self.assertEqual(restored.username, "saved-user")
+        self.assertTrue(self.store.warning)
 
     def test_filename_format_roundtrip_and_legacy_default(self):
         self.registry.values[SETTINGS_VALUE] = (json.dumps({"username": "legacy"}), REG_SZ)

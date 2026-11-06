@@ -68,13 +68,124 @@ class UserFlowTests(unittest.TestCase):
         self.assertTrue(self.app.documents_view.winfo_ismapped())
         self.assertEqual(len(self.app.rows), 1)
 
+    def test_storage_navigation_and_both_save_buttons_preserve_both_drafts(self):
+        self.assertEqual(list(self.app.nav_buttons), ["documents", "storage", "settings"])
+        self.assertEqual(self.app.nav_buttons["storage"].cget("text"), "Depolama")
+        for page in ("storage", "settings"):
+            with self.subTest(page=page):
+                self.app.settings_view.username_var.set("user-" + page)
+                self.app.storage_view.filename_format_var.set("{numara} - {ad}")
+                self.app.storage_view.document_subfolder_enabled_var.set(True)
+                self.app.storage_view.document_subfolder_format_var.set("{numara} - R{revizyon}")
+                self.app.storage_view.document_subfolder_match_var.set("contains")
+                self.app.show_view("documents")
+                self.app.show_view(page)
+                view = self.app.storage_view if page == "storage" else self.app.settings_view
+                view.save_button.invoke()
+                self.assertEqual(self.store.settings.username, "user-" + page)
+                self.assertEqual(self.store.settings.filename_format, "{numara} - {ad}")
+                self.assertEqual(self.store.settings.document_subfolder_format, "{numara} - R{revizyon}")
+                self.assertTrue(self.store.settings.document_subfolder_enabled)
+                self.assertEqual(self.store.settings.document_subfolder_match, "contains")
+
+    def test_job_settings_combine_both_drafts_and_preserve_unread_queue(self):
+        self.app.settings_view.base_url_var.set("https://example.invalid")
+        self.app.settings_view.username_var.set("test-user")
+        self.app.settings_view.password_var.set("synthetic-password")
+        self.app.storage_view.filename_format_var.set("{ad}")
+        self.app.storage_view.document_subfolder_enabled_var.set(True)
+        self.store.documents = ["UNREAD"]
+        settings = self.app._job_settings()
+        self.assertEqual(settings.username, "test-user")
+        self.assertEqual(settings.filename_format, "{ad}")
+        self.assertTrue(settings.document_subfolder_enabled)
+        self.assertEqual(self.store.settings, settings)
+        self.assertEqual(self.store.documents, ["UNREAD"])
+
+    def test_storage_validation_from_documents_routes_to_storage(self):
+        self.app.storage_view.filename_format_var.set("{unknown}")
+        self.app.show_view("documents")
+        self.assertIsNone(self.app._job_settings())
+        self.app.update()
+        self.assertEqual(self.app.current_view, "storage")
+        self.assertIn("etiket", self.app.storage_view._status_var.get().lower())
+
+    def test_invalid_timeout_keeps_advanced_connection_field_visible(self):
+        self.app.settings_view.timeout_var.set("invalid")
+        self.app.show_view("storage")
+        self.assertIsNone(self.app._job_settings())
+        self.app.update()
+        self.assertEqual(self.app.current_view, "settings")
+        self.assertTrue(self.app.settings_view._advanced_open)
+        view = self.app.settings_view
+        self.assertGreaterEqual(view.timeout_entry.winfo_rooty(), view._canvas.winfo_rooty())
+        self.assertLessEqual(view.timeout_entry.winfo_rooty() + view.timeout_entry.winfo_height(),
+                             view._canvas.winfo_rooty() + view._canvas.winfo_height())
+
+    def test_failed_global_save_preserves_both_drafts_and_saved_baseline(self):
+        from unittest.mock import patch
+        from ot_app.settings import SettingsError
+
+        baseline = self.app._last_saved_settings
+        self.app.settings_view.username_var.set("unsaved-user")
+        self.app.storage_view.filename_format_var.set("{ad}")
+        with patch.object(self.store, "save", side_effect=SettingsError("Test save failure")):
+            self.assertFalse(self.app.save_settings())
+        self.assertEqual(self.app._last_saved_settings, baseline)
+        self.assertEqual(self.app.read_settings().username, "unsaved-user")
+        self.assertEqual(self.app.read_settings().filename_format, "{ad}")
+
+    def test_close_saves_storage_and_connection_drafts_together(self):
+        from unittest.mock import patch
+
+        self.app.settings_view.username_var.set("close-user")
+        self.app.storage_view.filename_format_var.set("{ad}")
+        self.app.storage_view.document_subfolder_enabled_var.set(True)
+        with patch.object(self.app, "destroy"):
+            self.assertTrue(self.app.finish_close())
+        self.assertEqual(self.store.settings.username, "close-user")
+        self.assertEqual(self.store.settings.filename_format, "{ad}")
+        self.assertTrue(self.store.settings.document_subfolder_enabled)
+
+    def test_open_output_folder_uses_unsaved_storage_path(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            self.app.storage_view.output_dir_var.set(directory)
+            with patch.object(self.app, "_open_path") as open_path:
+                self.app.open_output_folder()
+            self.assertEqual(open_path.call_args.args[0], Path(directory))
+
+    def test_folder_ambiguity_is_not_success_and_can_be_retried(self):
+        from unittest.mock import patch
+        from ot_app.worker import WorkerEvent
+
+        self.app.add_numbers(["DOC-001"])
+        key = next(iter(self.app.rows))
+        self.app._handle_event(WorkerEvent("status", key, {
+            "status": "folder_ambiguous", "message": "Birden fazla klasör; belge atlandı.", "path": "",
+        }))
+        self.app.documents_view.filter_var.set("Sorunlu")
+        self.app.refresh_table()
+        self.assertEqual(self.app.documents_view.done_var.get(), "0")
+        self.assertEqual(self.app.documents_view.tree.get_children(), (key,))
+        self.assertEqual(self.app._row_values(self.app.rows[key])[3], "Klasör belirsiz")
+        with patch.object(self.app, "start_rows") as start:
+            self.app.retry_failed()
+        self.assertEqual(start.call_args.args[0], [self.app.rows[key]])
+
     def test_busy_state_keeps_cancel_available_and_blocks_mutation(self):
         self.app.add_numbers(["DOC-001"])
         self.app.set_busy(True)
         self.app.update()
         self.assertIn("disabled", self.app.documents_view.start_button.state())
         self.assertNotIn("disabled", self.app.documents_view.cancel_button.state())
+        self.assertIn("disabled", self.app.storage_view.save_button.state())
+        self.assertIn("disabled", self.app.storage_view.output_dir_entry.state())
         self.app.set_busy(False)
+        self.assertNotIn("disabled", self.app.storage_view.save_button.state())
 
     def test_minimum_window_keeps_document_rows_visible(self):
         self.app.geometry("1050x710")
@@ -156,6 +267,7 @@ class UserFlowTests(unittest.TestCase):
         self.app.add_numbers(["DOC-001", "MISSING"])
         with tempfile.TemporaryDirectory() as output:
             settings = AppSettings(base_url="https://ot.example.com", username="demo", password="secret", output_dir=output)
+            self.app.storage_view.output_dir_var.set(output)
             with patch.object(self.app.settings_view, "read_settings", return_value=settings):
                 self.app.start_all()
                 deadline = time.monotonic() + 3

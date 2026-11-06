@@ -81,6 +81,25 @@ class RowPresentationTests(unittest.TestCase):
 
 
 class ReportExportTests(unittest.TestCase):
+    def test_folder_ambiguity_report_explains_skipped_document_without_old_path(self):
+        import csv
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from ot_app.actions import DocumentActions
+
+        row = QueueRow("DOC-001", status="folder_ambiguous",
+                       message="Birden fazla klasör eşleşti; belge atlandı.", path="")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "report.csv"
+            controller = SimpleNamespace(selected_rows=lambda: [row], set_notice=lambda *args: None)
+            with patch("ot_app.actions.filedialog.asksaveasfilename", return_value=str(path)):
+                DocumentActions.export_report(controller)
+            with path.open(encoding="utf-8-sig", newline="") as stream:
+                cells = list(csv.reader(stream, delimiter=";"))
+            self.assertEqual(cells[1][2:], ["Klasör belirsiz", row.message, ""])
+
     def test_failed_report_replace_preserves_existing_report(self):
         import tempfile
         from pathlib import Path
