@@ -167,6 +167,21 @@ class DocumentFolderTests(unittest.TestCase):
             self.resolve("prefix")
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_index_template_reuses_or_creates_the_node_index_folder(self):
+        existing = self.root / "2.1 - ABC"
+        existing.mkdir()
+        self.assertEqual(resolve_document_folder(
+            self.root, self.document, "{index} - {numara}", index="2.1"
+        ), existing)
+        self.assertEqual(resolve_document_folder(
+            self.root, self.document, "{index} - {numara}", index="3"
+        ), self.root / "3 - ABC")
+
+    def test_index_template_without_context_cannot_create_a_folder(self):
+        with self.assertRaises(ValueError):
+            resolve_document_folder(self.root, self.document, "{index}")
+        self.assertEqual(list(self.root.iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

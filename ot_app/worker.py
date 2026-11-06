@@ -14,7 +14,8 @@ from pathlib import Path
 import queue
 import threading
 import time
-from typing import Callable, Iterable
+from types import MappingProxyType
+from typing import Callable, Iterable, Mapping
 
 from otClient import (
     Document,
@@ -25,7 +26,7 @@ from otClient import (
 )
 
 from .filename_format import DEFAULT_FILENAME_FORMAT, format_document_filename
-from .hierarchy import HierarchyEntry, validate_hierarchy
+from .hierarchy import HierarchyEntry, hierarchy_indices, validate_hierarchy
 from .settings import AppSettings
 from .storage import FolderAmbiguityError, resolve_document_folder
 
@@ -46,6 +47,7 @@ class JobItem:
     number: str
     document: Document | None = None
     parent_key: str | None = None
+    row_index: str | None = None
 
 
 @dataclass(frozen=True)
@@ -160,7 +162,9 @@ class DownloadWorker(threading.Thread):
         self._explicit_hierarchy = hierarchy is not None
         self._hierarchy = tuple(hierarchy) if hierarchy is not None else self._items
         self._hierarchy_items: dict[str, JobItem] = {}
+        self._hierarchy_parents: frozenset[str] = frozenset()
         self._hierarchy_cache: dict[str, _HierarchyResolution] = {}
+        self._row_indices: Mapping[str, str] = MappingProxyType({})
         self._selected_keys = {item.key for item in self._items}
 
     def _emit(self, kind: str, key: str = "", **payload: object) -> None:
@@ -196,6 +200,22 @@ class DownloadWorker(threading.Thread):
             if self._hierarchy_items.get(item.key) != item or positions[item.key] <= previous:
                 raise OTError("İndirme satırları tam klasör hiyerarşisi ve sırası ile eşleşmiyor.")
             previous = positions[item.key]
+        self._hierarchy_parents = frozenset(
+            item.parent_key for item in self._hierarchy if item.parent_key is not None
+        )
+
+    def _snapshot_row_indices(self) -> None:
+        """Preserve supplied queue indices; derive missing ones from the snapshot."""
+        if self._settings.manual_folder_hierarchy_enabled:
+            items = self._hierarchy
+            fallback = hierarchy_indices(tuple(HierarchyEntry(item.key, item.parent_key) for item in items))
+        else:
+            items = self._items
+            fallback = {item.key: str(index) for index, item in enumerate(items, 1)}
+        self._row_indices = MappingProxyType({
+            item.key: item.row_index if item.row_index is not None else fallback[item.key]
+            for item in items
+        })
 
     def _resolve_hierarchy_node(self, connector, node: JobItem, parent: Path) -> _HierarchyResolution:
         """Resolve one node once, retaining expected failures for this batch."""
@@ -217,10 +237,16 @@ class DownloadWorker(threading.Thread):
                     return _HierarchyResolution(failure_key=node.key, status="ambiguous",
                                                 message=f"{len(candidates)} aday bulundu. İndirilecek belgeyi seçin.",
                                                 candidates=candidates)
-            folder = resolve_document_folder(
-                parent, selected, self._settings.document_subfolder_format,
-                self._settings.document_subfolder_match, strict_descendant=True,
-            )
+            folder = parent
+            # Parent status comes from the complete queue, including unselected
+            # children. Leaves share this destination unless individual folders
+            # are enabled, and must not scan or reuse a matching child folder.
+            if self._settings.document_subfolder_enabled or node.key in self._hierarchy_parents:
+                folder = resolve_document_folder(
+                    parent, selected, self._settings.document_subfolder_format,
+                    self._settings.document_subfolder_match, strict_descendant=True,
+                    index=self._row_indices[node.key],
+                )
             self._check_cancelled()
             return _HierarchyResolution(document=selected, folder=folder)
         except DownloadCancelled:
@@ -311,6 +337,7 @@ class DownloadWorker(threading.Thread):
                     selected,
                     self._settings.document_subfolder_format,
                     self._settings.document_subfolder_match,
+                    index=self._row_indices[item.key],
                 )
             except FolderAmbiguityError as error:
                 self._status(
@@ -324,7 +351,9 @@ class DownloadWorker(threading.Thread):
     def _download_item(self, connector, item: JobItem, selected: Document,
                        output_dir: str | Path, filenames) -> None:
         self._check_cancelled()
-        file_name, source_name = self._reserve_filename(selected, output_dir, filenames)
+        file_name, source_name = self._reserve_filename(
+            selected, output_dir, filenames, self._row_indices[item.key]
+        )
         self._status(item, "downloading", "Belge indiriliyor…", document=selected)
         progress = _ThrottledProgress(
             lambda downloaded, total: self._emit(
@@ -368,8 +397,8 @@ class DownloadWorker(threading.Thread):
                 status = "error"
         self._status(item, status, message, document=selected, path=str(result.path))
 
-    def _reserve_filename(self, selected, output_dir, filenames) -> tuple[str, str | None]:
-        file_name = format_document_filename(self._settings.filename_format, selected)
+    def _reserve_filename(self, selected, output_dir, filenames, index: str) -> tuple[str, str | None]:
+        file_name = format_document_filename(self._settings.filename_format, selected, index=index)
         source_name = selected.name if self._settings.filename_format.strip() != DEFAULT_FILENAME_FORMAT else None
         target_name = safe_windows_filename(file_name, selected.id)
         normalized = (str(Path(output_dir).expanduser().resolve()).casefold(), target_name.casefold())
@@ -438,7 +467,9 @@ class DownloadWorker(threading.Thread):
             seen.add(identifier)
             try:
                 self._status(item, "downloading", f"{label} indiriliyor ({index}/{len(identifiers)})…")
-                self._download_related_file(connector, identifier, content_type, output_dir, filenames)
+                self._download_related_file(
+                    connector, identifier, content_type, output_dir, filenames, self._row_indices[item.key]
+                )
                 completed += 1
             except DownloadCancelled:
                 raise
@@ -451,14 +482,15 @@ class DownloadWorker(threading.Thread):
                 errors.append(self._message(OTError(f"{label} {identifier}: {self._message(error)}")))
         return completed, errors
 
-    def _download_related_file(self, connector, identifier, content_type, output_dir, filenames) -> None:
+    def _download_related_file(self, connector, identifier, content_type, output_dir, filenames,
+                               index: str) -> None:
         self._check_cancelled()
         details = connector.get_document_by_id(identifier, content_type=content_type)
         self._check_cancelled()
         related = Document.from_properties(details.get("properties"), content_type=content_type)
         if related.id != identifier:
             raise OTError("İlgili belge bilgisi istenen kimlikle eşleşmiyor.")
-        file_name, source_name = self._reserve_filename(related, output_dir, filenames)
+        file_name, source_name = self._reserve_filename(related, output_dir, filenames, index)
         self._check_cancelled()
         connector.download_document(
             related.id, output_dir, file_name=file_name, source_name=source_name,
@@ -479,6 +511,7 @@ class DownloadWorker(threading.Thread):
             self._check_cancelled()
             if self._settings.manual_folder_hierarchy_enabled:
                 self._validate_hierarchy()
+            self._snapshot_row_indices()
             try:
                 self._settings.validate(require_connection=True)
             except ValueError as error:

@@ -56,13 +56,13 @@ class RelatedDownloadTests(unittest.TestCase):
         self.session.routes[self.path(kind, identifier)] = lambda: FakeResponse({"properties": properties})
         self.media(kind, identifier, b"%PDF-" + identifier.encode())
 
-    def run_worker(self, forms=True, attachments=True, items=None):
+    def run_worker(self, forms=True, attachments=True, items=None, hierarchy=None):
         self.settings.download_related_forms = forms
         self.settings.download_related_attachments = attachments
         events = queue.Queue()
         with patch("otClient.requests.Session", return_value=self.session), patch.object(OTConnector, "login", return_value=True):
             worker = DownloadWorker(self.settings, items or [JobItem("row", "DOC", self.document)],
-                                    events, self.cancel)
+                                    events, self.cancel, hierarchy=hierarchy)
             worker.run()
         result = []
         while not events.empty():
@@ -109,6 +109,32 @@ class RelatedDownloadTests(unittest.TestCase):
         self.assertEqual(status["path"], str(folder / "DOC - Main - R2.pdf"))
         progress = [event.payload for event in events if event.kind == "progress"]
         self.assertEqual(progress[-1]["downloaded"], len(b"%PDF-main"))
+
+    def test_related_files_use_owning_flat_row_index_and_their_own_metadata(self):
+        self.settings.filename_format = "{index}-{numara}-{ad}-R{revizyon}"
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_format = "{index}-{numara}"
+        events = self.run_worker(items=[JobItem("row", "DOC", self.document, row_index="7")])
+        folder = self.root / "7-DOC"
+        self.assertEqual(sorted(path.name for path in folder.iterdir()),
+                         ["7-ATT-Attachment title-R4.pdf", "7-DOC-Main-R2.pdf", "7-FORM-Form title-R3.pdf"])
+        self.assertEqual(self.last_status(events)["path"], str(folder / "7-DOC-Main-R2.pdf"))
+        self.assertEqual(list(self.root.iterdir()), [folder])
+
+    def test_related_leaf_files_use_complete_hierarchy_index_and_parent_destination(self):
+        self.settings.manual_folder_hierarchy_enabled = True
+        self.settings.filename_format = "{index}-{numara}-{ad}-R{revizyon}"
+        self.settings.document_subfolder_format = "{index}-{numara}"
+        ancestor = JobItem("ancestor", "PARENT", Document("parent", "PARENT.pdf", "Parent", ""))
+        sibling = JobItem("sibling", "SIBLING", None, "ancestor")
+        selected = JobItem("row", "DOC", self.document, "ancestor")
+        events = self.run_worker(items=[selected], hierarchy=(ancestor, sibling, selected))
+        folder = self.root / "1-PARENT"
+        self.assertEqual(sorted(path.name for path in folder.iterdir()),
+                         ["1.2-ATT-Attachment title-R4.pdf", "1.2-DOC-Main-R2.pdf", "1.2-FORM-Form title-R3.pdf"])
+        self.assertEqual(self.last_status(events)["path"], str(folder / "1.2-DOC-Main-R2.pdf"))
+        self.assertEqual(list(self.root.iterdir()), [folder])
+        self.assertFalse(any("parent/media" in path or "SIBLING" in path for path in self.paths()))
 
     def test_absent_null_and_empty_relationships_need_no_child_requests(self):
         for details in ({}, {"forms": None, "attachments": []}, {"forms": [], "attachments": None}):

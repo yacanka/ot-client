@@ -72,10 +72,37 @@ class HierarchyTests(unittest.TestCase):
             entries(("a",), ("b", "a"), ("bb", "b"), ("bbb", "bb"), ("c", "a")),
         )
 
+    def test_vertical_moves_swap_whole_sibling_subtrees_without_changing_parents(self):
+        original = entries(("a",), ("aa", "a"), ("b",), ("bb", "b"), ("bbb", "bb"), ("c",))
+        expected = entries(("b",), ("bb", "b"), ("bbb", "bb"), ("a",), ("aa", "a"), ("c",))
+        self.assertEqual(move_hierarchy(original, ["b"], "up"), expected)
+        self.assertEqual(move_hierarchy(original, ["a"], "down"), expected)
+        self.assertEqual(move_hierarchy(expected, ["b"], "down"), original)
+        validate_hierarchy(expected)
+
+    def test_vertical_nested_block_moves_ignore_selected_descendants(self):
+        original = entries(("a",), ("b", "a"), ("bb", "b"), ("c", "a"),
+                           ("cc", "c"), ("d", "a"), ("dd", "d"), ("e",))
+        expected = entries(("a",), ("c", "a"), ("cc", "c"), ("d", "a"),
+                           ("dd", "d"), ("b", "a"), ("bb", "b"), ("e",))
+        self.assertEqual(move_hierarchy(original, iter(["dd", "d", "c", "cc", "c"]), "up"), expected)
+        self.assertEqual(move_hierarchy(expected, ["c", "d"], "down"), original)
+
+    def test_vertical_boundaries_do_not_cross_parent_or_forest_boundaries(self):
+        original = entries(("a",), ("aa", "a"), ("ab", "a"), ("b",), ("ba", "b"))
+        for selection, direction in ((["a"], "up"), (["b"], "down"), (["aa"], "up"),
+                                     (["ab"], "down"), (["ba"], "down"),
+                                     (["aa", "ab"], "up"), (["aa", "ab"], "down"),
+                                     ([], "up"), ([], "down")):
+            with self.subTest(selection=selection, direction=direction):
+                self.assertEqual(move_hierarchy(original, selection, direction), original)
+        for direction in ("up", "down"):
+            self.assertEqual(move_hierarchy((), [], direction), ())
+
     def test_invalid_selection_is_atomic(self):
         original = entries(("a",), ("aa", "a"), ("ab", "a"), ("b",), ("c",))
         for selection in (["a", "c"], ["aa", "b"], ["missing"]):
-            for direction in ("indent", "outdent"):
+            for direction in ("indent", "outdent", "up", "down"):
                 with self.subTest(selection=selection, direction=direction):
                     with self.assertRaises(HierarchyError) as error:
                         move_hierarchy(original, selection, direction)
@@ -149,6 +176,9 @@ class HierarchyTests(unittest.TestCase):
         result = move_hierarchy(original, (str(index) for index in range(1, 10000)), "indent")
         self.assertEqual(hierarchy_indices(result)["9999"], "1.9999")
         self.assertEqual(move_hierarchy(result, (str(index) for index in range(1, 10000)), "outdent"), original)
+        reordered = move_hierarchy(original, (str(index) for index in range(1, 10000)), "up")
+        self.assertEqual(reordered, original[1:] + original[:1])
+        self.assertEqual(move_hierarchy(reordered, (str(index) for index in range(1, 10000)), "down"), original)
 
     def test_entries_are_frozen_and_queue_parent_defaults_preserve_old_arguments(self):
         entry = HierarchyEntry("a")

@@ -22,31 +22,57 @@ def metadata(documents, parents):
 
 
 class HierarchySettingsTests(unittest.TestCase):
-    def test_manual_mode_is_strict_boolean_and_exclusive(self):
+    def test_manual_mode_is_strict_boolean(self):
         self.assertIs(getattr(AppSettings(), "manual_folder_hierarchy_enabled", None), False)
         for value in (None, 0, 1, "false"):
             with self.subTest(value=value), self.assertRaises(ValueError) as caught:
                 AppSettings(manual_folder_hierarchy_enabled=value).validate()
             self.assertEqual(caught.exception.field, "manual_folder_hierarchy_enabled")
-        with self.assertRaises(ValueError):
-            AppSettings(manual_folder_hierarchy_enabled=True, document_subfolder_enabled=True).validate()
+
+    def test_folder_modes_validate_and_roundtrip_independently(self):
+        for individual, manual in ((False, False), (True, False), (False, True), (True, True)):
+            for session_only in (False, True):
+                with self.subTest(individual=individual, manual=manual, session_only=session_only):
+                    store = RegistryStore(platform="darwin") if session_only else RegistryStore(
+                        FakeRegistry(), FakeProtector())
+                    settings = AppSettings(
+                        document_subfolder_enabled=individual,
+                        manual_folder_hierarchy_enabled=manual,
+                        document_subfolder_format="{numara} - {ad}",
+                        document_subfolder_match="contains",
+                    )
+                    settings.validate()
+                    store.save(settings)
+                    self.assertEqual(store.load()[0], settings)
+                    if not session_only:
+                        self.assertEqual(store.warning, "")
 
     def test_manual_mode_validates_shared_folder_format(self):
         settings = AppSettings(document_subfolder_format="{unfinished")
         settings.validate()
-        with self.assertRaises(ValueError) as caught:
-            replace(settings, manual_folder_hierarchy_enabled=True).validate()
-        self.assertEqual(caught.exception.field, "document_subfolder_format")
+        for individual, manual in ((True, False), (False, True), (True, True)):
+            with self.subTest(individual=individual, manual=manual):
+                with self.assertRaises(ValueError) as caught:
+                    replace(settings, document_subfolder_enabled=individual,
+                            manual_folder_hierarchy_enabled=manual).validate()
+                self.assertEqual(caught.exception.field, "document_subfolder_format")
 
-    def test_corrupt_both_modes_preserves_legacy_mode_regardless_of_json_order(self):
+    def test_both_modes_off_preserves_unfinished_template_when_saved(self):
+        store = RegistryStore(FakeRegistry(), FakeProtector())
+        settings = AppSettings(document_subfolder_format="  {unfinished  ")
+        store.save(settings)
+        self.assertEqual(store.load()[0], settings)
+        self.assertEqual(store.warning, "")
+
+    def test_both_modes_load_without_warning_regardless_of_json_order(self):
         for pairs in (("manual_folder_hierarchy_enabled", "document_subfolder_enabled"), ("document_subfolder_enabled", "manual_folder_hierarchy_enabled")):
             registry = FakeRegistry()
             registry.values[SETTINGS_VALUE] = (json.dumps({name: True for name in pairs}), REG_SZ)
             store = RegistryStore(registry, FakeProtector())
             settings, _ = store.load()
             self.assertTrue(settings.document_subfolder_enabled)
-            self.assertFalse(settings.manual_folder_hierarchy_enabled)
-            self.assertTrue(store.warning)
+            self.assertTrue(settings.manual_folder_hierarchy_enabled)
+            self.assertEqual(store.warning, "")
 
 
 class HierarchyPersistenceTests(unittest.TestCase):

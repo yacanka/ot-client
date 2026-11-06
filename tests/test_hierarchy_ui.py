@@ -36,22 +36,23 @@ class HierarchyUITests(unittest.TestCase):
         tree = self.app.documents_view.tree
         return [tree.set(key, "index").strip() for key in tree.get_children()]
 
-    def test_mode_toggle_shares_format_and_enforces_exclusivity(self):
+    def test_mode_toggles_share_format_and_remain_independent(self):
         view = self.app.storage_view
         self.assertNotIn("index", self.app.documents_view.tree["displaycolumns"])
         view.manual_folder_hierarchy_enabled_button.invoke()
         self.assertIn("index", self.app.documents_view.tree["displaycolumns"])
-        self.assertIn("disabled", view.document_subfolder_enabled_button.state())
+        self.assertNotIn("disabled", view.document_subfolder_enabled_button.state())
         self.assertNotIn("disabled", view.document_subfolder_format_entry.state())
         view.document_subfolder_format_var.set("{numara} - {ad}")
         view.document_subfolder_match_var.set("contains")
         self.app.set_busy(True)
         self.assertIn("disabled", view.manual_folder_hierarchy_enabled_button.state())
         self.app.set_busy(False)
-        self.assertIn("disabled", view.document_subfolder_enabled_button.state())
-        view.manual_folder_hierarchy_enabled_button.invoke()
+        self.assertNotIn("disabled", view.document_subfolder_enabled_button.state())
         view.document_subfolder_enabled_button.invoke()
-        self.assertIn("disabled", view.manual_folder_hierarchy_enabled_button.state())
+        self.assertNotIn("disabled", view.manual_folder_hierarchy_enabled_button.state())
+        self.assertTrue(view.read_settings().document_subfolder_enabled)
+        self.assertTrue(view.read_settings().manual_folder_hierarchy_enabled)
         self.assertEqual(view.read_settings().document_subfolder_format, "{numara} - {ad}")
         self.assertEqual(view.read_settings().document_subfolder_match, "contains")
 

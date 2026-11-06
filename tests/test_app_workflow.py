@@ -142,5 +142,40 @@ class ReportExportTests(unittest.TestCase):
             self.assertEqual(row.number, "=1+1")
 
 
+class JobIndexTests(unittest.TestCase):
+    def start(self, selected, *, manual=False):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from ot_app.actions import DocumentActions
+
+        rows = [QueueRow(number, key=number) for number in ("A", "B", "C", "D")]
+        rows[1].parent_key = rows[2].parent_key = "A"
+        controller = SimpleNamespace(
+            busy=False, rows={row.key: row for row in rows},
+            _job_settings=lambda: AppSettings(manual_folder_hierarchy_enabled=manual),
+            documents_view=SimpleNamespace(progress=Mock(), progress_var=Mock()),
+            set_busy=Mock(), refresh_table=Mock(), events=queue.Queue(), connector_factory=Mock(),
+        )
+        controller._hierarchy_entries = lambda: DocumentActions._hierarchy_entries(controller)
+        with patch("ot_app.app.DownloadWorker") as worker:
+            Application.start_rows(controller, [controller.rows[key] for key in selected])
+        return controller, worker.call_args
+
+    def test_flat_selected_job_keeps_full_queue_indices_and_order(self):
+        controller, (args, kwargs) = self.start(["D", "B"])
+        self.assertEqual([(item.key, item.row_index) for item in args[1]], [("B", "2"), ("D", "4")])
+        self.assertIsNone(kwargs["hierarchy"])
+        self.assertTrue(all(item.parent_key is None for item in args[1]))
+        controller.rows.pop("A")
+        self.assertEqual(args[1][0].row_index, "2")
+
+    def test_hierarchy_selected_job_and_ancestors_share_full_tree_indices(self):
+        _, (args, kwargs) = self.start(["D", "C"], manual=True)
+        self.assertEqual([(item.key, item.row_index) for item in args[1]], [("C", "1.2"), ("D", "2")])
+        self.assertEqual([(item.key, item.row_index) for item in kwargs["hierarchy"]],
+                         [("A", "1"), ("B", "1.1"), ("C", "1.2"), ("D", "2")])
+        self.assertIs(args[1][0], kwargs["hierarchy"][2])
+
+
 if __name__ == "__main__":
     unittest.main()

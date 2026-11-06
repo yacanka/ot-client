@@ -8,6 +8,7 @@ from tkinter import font as tkfont, ttk
 from typing import Callable
 
 from .settings import AppSettings
+from .theme import BLUE, BLUE_PALE
 
 
 class SettingsPage(ttk.Frame):
@@ -53,6 +54,27 @@ class SettingsPage(ttk.Frame):
         style.configure("SettingsSuccess.TLabel", foreground="#18794E")
         style.configure("SettingsError.TLabel", foreground="#B42336")
         style.configure("SettingsFormatError.TLabel", background="#FFFFFF", foreground="#B42336")
+        style.configure(
+            "SettingsHierarchy.TFrame", background=BLUE_PALE, bordercolor=BLUE,
+            borderwidth=1, relief="solid",
+        )
+        style.configure(
+            "SettingsHierarchyTitle.TLabel", background=BLUE_PALE, foreground=BLUE,
+            font=(family, 14, "bold"),
+        )
+        style.configure(
+            "SettingsHierarchy.TLabel", background=BLUE_PALE, foreground="#17253B",
+            font=(family, 9),
+        )
+        style.configure(
+            "SettingsHierarchy.TCheckbutton", background=BLUE_PALE, foreground=BLUE,
+            font=(family, 11, "bold"),
+        )
+        style.map(
+            "SettingsHierarchy.TCheckbutton",
+            background=[("active", BLUE_PALE), ("disabled", BLUE_PALE)],
+            foreground=[("disabled", "#94A0B2")],
+        )
 
     def _build_header(self, title: str, intro: str) -> None:
         header = ttk.Frame(self, padding=(0, 0, 0, 17))

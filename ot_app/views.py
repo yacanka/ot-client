@@ -45,12 +45,13 @@ class DocumentsView(ttk.Frame):
 
     def _header(self):
         row = ttk.Frame(self)
-        row.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         row.columnconfigure(0, weight=1)
         ttk.Label(row, text="ÇALIŞMA ALANI", style="Overline.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(row, text="Belgeler", style="Title.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 2))
-        self.header_hint = ttk.Label(row, text="Belge numaralarını ekleyin. Dosyalarınızı tek yerden güncel tutun.", style="Muted.TLabel")
+        self.header_hint = ttk.Label(row, style="Muted.TLabel")
         self.header_hint.grid(row=2, column=0, sticky="w")
+        self.header_hint.grid_remove()
         self.connection_button = ttk.Button(row, text="Bağlantıyı ayarla", style="Link.TButton",
                                             command=self.callbacks["settings"])
         self.connection_button.grid(row=1, column=1, sticky="e", padx=(14, 0))
@@ -73,8 +74,8 @@ class DocumentsView(ttk.Frame):
             ttk.Label(content, text=subtitle, style="CardMuted.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     def _input_card(self):
-        border, content = card(self, padding=(16, 13))
-        border.grid(row=2, column=0, sticky="ew", pady=(0, 16))
+        border, content = card(self, padding=(16, 8))
+        border.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         content.columnconfigure(0, weight=1)
         ttk.Label(content, text="Belge numarası", style="Card.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 7))
         self.number_entry = ttk.Entry(content, textvariable=self.input_var)
@@ -86,15 +87,13 @@ class DocumentsView(ttk.Frame):
         self.bulk_button.grid(row=1, column=2, padx=(0, 8))
         self.import_button = ttk.Button(content, text="Dosyadan al", command=self.callbacks["import"])
         self.import_button.grid(row=1, column=3)
-        self.input_hint = ttk.Label(content, text="Enter ile ekleyin veya Excel listenizi Toplu ekle alanına yapıştırın.", style="CardMuted.TLabel")
-        self.input_hint.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
     def _table_card(self):
         border, content = card(self, padding=0)
         border.grid(row=3, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
         content.rowconfigure(1, weight=1)
-        toolbar = ttk.Frame(content, style="Card.TFrame", padding=(14, 10))
+        toolbar = ttk.Frame(content, style="Card.TFrame", padding=(14, 7))
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.columnconfigure(1, weight=1)
         ttk.Label(toolbar, text="Filtre", style="CardMuted.TLabel").grid(row=0, column=0, padx=(0, 8))
@@ -103,8 +102,6 @@ class DocumentsView(ttk.Frame):
         self.filter_box = ttk.Combobox(toolbar, textvariable=self.filter_var, state="readonly", width=17,
                                       values=("Tüm belgeler", "Bekleyen", "Tamamlanan", "Sorunlu", "Seçim gerekli"))
         self.filter_box.grid(row=0, column=2, padx=(0, 8))
-        self.remove_button = ttk.Button(toolbar, text="Seçileni kaldır", command=self.callbacks["remove"])
-        self.remove_button.grid(row=0, column=3, padx=(0, 8))
         self.list_menu = tk.Menu(toolbar, tearoff=False)
         self.list_menu.add_command(label="Listeyi dışa aktar…", command=self.callbacks["export"])
         self.list_menu.add_command(label="Sonuç raporunu dışa aktar…", command=self.callbacks["report"])
@@ -114,7 +111,7 @@ class DocumentsView(ttk.Frame):
         self.list_menu.add_separator()
         self.list_menu.add_command(label="Tüm listeyi temizle…", command=self.callbacks["clear"])
         self.menu_button = ttk.Menubutton(toolbar, text="Liste işlemleri", menu=self.list_menu)
-        self.menu_button.grid(row=0, column=4)
+        self.menu_button.grid(row=0, column=3)
         self.table_area = ttk.Frame(content, style="Card.TFrame")
         self.table_area.grid(row=1, column=0, sticky="nsew")
         self.table_area.columnconfigure(0, weight=1)
@@ -138,9 +135,11 @@ class DocumentsView(ttk.Frame):
         scroll = ttk.Scrollbar(self.table_area, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll.set)
-        horizontal = ttk.Scrollbar(self.table_area, orient="horizontal", command=self.tree.xview)
-        horizontal.grid(row=1, column=0, sticky="ew")
-        self.tree.configure(xscrollcommand=horizontal.set)
+        self.horizontal_scrollbar = ttk.Scrollbar(self.table_area, orient="horizontal", command=self.tree.xview)
+        self.horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
+        self.horizontal_scrollbar.grid_remove()
+        self.tree.configure(xscrollcommand=self._update_horizontal_scroll)
+        self.tree.bind("<Configure>", self._fit_title_column)
         for state in STATUS_LABELS:
             color = GREEN if state in SUCCESS else RED if state == "error" else AMBER if state in {"not_found", "ambiguous", "folder_ambiguous"} else BLUE if state in {"searching", "downloading"} else MUTED
             self.tree.tag_configure(state, foreground=color)
@@ -149,8 +148,25 @@ class DocumentsView(ttk.Frame):
         self.tree.bind("<Control-a>", self._select_all)
         self.tree.bind("<Control-c>", lambda _: self.callbacks["copy"]())
         self.tree.bind("<Control-z>", lambda _: self.callbacks["undo"]())
+        self.tree.bind("<Up>", lambda _: self._change_hierarchy("up"))
+        self.tree.bind("<Down>", lambda _: self._change_hierarchy("down"))
         self.tree.bind("<Right>", lambda _: self._change_hierarchy("indent"))
         self.tree.bind("<Left>", lambda _: self._change_hierarchy("outdent"))
+        modifiers = ("Shift", "Control", "Alt", "Meta")
+        if self.tk.call("tk", "windowingsystem") == "aqua":
+            modifiers += ("Command", "Option")
+        # Tk resolves platform modifiers; these bindings continue to native navigation.
+        for key in ("Up", "Down", "Right", "Left"):
+            for modifier in modifiers:
+                self.tree.bind(f"<{modifier}-{key}>", lambda _: None)
+        self.context_menu = tk.Menu(self.tree, tearoff=False)
+        self.context_menu.add_command(label="Seçileni indir", command=self.callbacks["selected"])
+        self.context_menu.add_command(label="Seçileni kaldır", command=self.callbacks["remove"])
+        self.context_menu.add_command(label="Belge numarasını düzenle…", command=self.callbacks["edit"])
+        self.tree.bind("<Button-3>", self._show_context_menu)
+        if self.tk.call("tk", "windowingsystem") == "aqua":
+            self.tree.bind("<Button-2>", self._show_context_menu)
+            self.tree.bind("<Control-Button-1>", self._show_context_menu)
         self.tree.bind("<Double-1>", lambda _: self.callbacks["open_file"]())
         self.empty = ttk.Frame(self.table_area, style="Card.TFrame", padding=14)
         ttk.Label(self.empty, text="Belge listeniz burada görünecek", style="Section.TLabel").pack(pady=(0, 8))
@@ -163,17 +179,50 @@ class DocumentsView(ttk.Frame):
         self.manual_hierarchy = bool(enabled)
         columns = ("index", *self._data_columns) if enabled else self._data_columns
         self.tree.configure(displaycolumns=columns)
+        self._fit_title_column()
+
+    def _fit_title_column(self, _event=None):
+        available = self.tree.winfo_width() - 2
+        if available <= 0:
+            return
+        columns = self.tree["displaycolumns"]
+        fixed_width = sum(self.tree.column(column, "width") for column in columns if column != "title")
+        width = max(self.tree.column("title", "minwidth"), available - fixed_width)
+        if self.tree.column("title", "width") != width:
+            self.tree.column("title", width=width)
+
+    def _update_horizontal_scroll(self, first, last):
+        self.horizontal_scrollbar.set(first, last)
+        if float(first) > 0 or float(last) < 1:
+            self.horizontal_scrollbar.grid()
+        else:
+            self.horizontal_scrollbar.grid_remove()
+
+    def _show_context_menu(self, event):
+        key = self.tree.identify_row(event.y)
+        if not key or self.tree.identify_region(event.x, event.y) not in ("tree", "cell"):
+            return "break"
+        if key not in self.tree.selection():
+            self.tree.selection_set(key)
+        self.tree.focus(key)
+        self.tree.focus_set()
+        self.callbacks["selection"]()
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+        return "break"
 
     def _change_hierarchy(self, direction):
-        if self.manual_hierarchy:
+        if direction in ("up", "down") or self.manual_hierarchy:
             self.callbacks["hierarchy"](direction)
             return "break"
 
     def _detail_bar(self, content):
-        detail = ttk.Frame(content, style="Card.TFrame", padding=(14, 9))
+        detail = ttk.Frame(content, style="Card.TFrame", padding=(14, 6))
         detail.grid(row=2, column=0, sticky="ew")
         detail.columnconfigure(0, weight=1)
-        ttk.Separator(detail).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        ttk.Separator(detail).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 5))
         ttk.Label(detail, textvariable=self.selection_var, style="Card.TLabel").grid(row=1, column=0, sticky="w")
         self.detail_label = ttk.Label(detail, textvariable=self.detail_var, style="CardMuted.TLabel", wraplength=550)
         self.detail_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
@@ -187,7 +236,7 @@ class DocumentsView(ttk.Frame):
 
     def _footer(self):
         area = ttk.Frame(self)
-        area.grid(row=4, column=0, sticky="ew", pady=(14, 0))
+        area.grid(row=4, column=0, sticky="ew", pady=(10, 0))
         area.columnconfigure(0, weight=1)
         row = ttk.Frame(area)
         row.grid(row=0, column=0, sticky="ew")
@@ -195,12 +244,10 @@ class DocumentsView(ttk.Frame):
         ttk.Label(row, textvariable=self.progress_var, style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         self.cancel_button = ttk.Button(row, text="Durdur", style="Danger.TButton", command=self.callbacks["cancel"])
         self.cancel_button.grid(row=0, column=1, padx=(10, 6))
-        self.selected_button = ttk.Button(row, text="Seçileni indir", command=self.callbacks["selected"])
-        self.selected_button.grid(row=0, column=2, padx=(0, 6))
         self.start_button = ttk.Button(row, text="Listeyi indir", style="Accent.TButton", command=self.callbacks["start"])
-        self.start_button.grid(row=0, column=3)
+        self.start_button.grid(row=0, column=2)
         self.progress = ttk.Progressbar(area, mode="determinate", maximum=1)
-        self.progress.grid(row=1, column=0, sticky="ew", pady=(10, 9))
+        self.progress.grid(row=1, column=0, sticky="ew", pady=(7, 6))
         folder_row = ttk.Frame(area)
         folder_row.grid(row=2, column=0, sticky="ew")
         folder_row.columnconfigure(0, weight=1)
@@ -209,8 +256,6 @@ class DocumentsView(ttk.Frame):
         ttk.Button(folder_row, text="Klasörü aç", style="Link.TButton", command=self.callbacks["open_folder"]).grid(row=0, column=1)
         self.cancel_button.state(["disabled"])
         self.start_button.state(["disabled"])
-        self.selected_button.state(["disabled"])
-        self.remove_button.state(["disabled"])
 
     def _select_all(self, _event):
         self.tree.selection_set(self.tree.get_children())
@@ -223,28 +268,35 @@ class DocumentsView(ttk.Frame):
         self.compact = compact
         if compact:
             self.metrics_area.grid_remove()
-            self.input_hint.grid_remove()
         else:
             self.metrics_area.grid()
-            self.input_hint.grid()
         self.refresh_compact_summary()
 
     def refresh_compact_summary(self):
-        self.header_hint.configure(text=(f"{self.total_var.get()} belge  ·  {self.done_var.get()} tamamlanan  ·  {self.waiting_var.get()} işlem bekleyen"
-                                        if self.compact else "Belge numaralarını ekleyin. Dosyalarınızı tek yerden güncel tutun."))
+        if self.compact:
+            self.header_hint.configure(text=f"{self.total_var.get()} belge  ·  {self.done_var.get()} tamamlanan  ·  {self.waiting_var.get()} işlem bekleyen")
+            self.header_hint.grid()
+        else:
+            self.header_hint.grid_remove()
 
     def set_busy(self, value):
         self.busy = value
         for widget in (self.number_entry, self.add_button, self.bulk_button, self.import_button,
-                       self.menu_button, self.remove_button, self.start_button, self.selected_button):
+                       self.menu_button, self.start_button):
             widget.state(["disabled"] if value else ["!disabled"])
         self.cancel_button.state(["!disabled"] if value else ["disabled"])
         self.choose_button.state(["disabled"] if value else ["!disabled"])
+        self._refresh_context_actions(len(self.tree.selection()))
+
+    def _refresh_context_actions(self, selected_count):
+        enabled = selected_count > 0 and not self.busy
+        for index in (0, 1):
+            self.context_menu.entryconfigure(index, state="normal" if enabled else "disabled")
+        self.context_menu.entryconfigure(2, state="normal" if enabled and selected_count == 1 else "disabled")
 
     def refresh_actions(self, count, selected_count):
         self.start_button.state(["!disabled"] if count and not self.busy else ["disabled"])
-        for widget in (self.selected_button, self.remove_button):
-            widget.state(["!disabled"] if selected_count and not self.busy else ["disabled"])
+        self._refresh_context_actions(selected_count)
         if count:
             self.empty.place_forget()
         elif not self.search_var.get() and self.filter_var.get() == "Tüm belgeler":

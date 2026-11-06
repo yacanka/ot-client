@@ -1,5 +1,5 @@
 """Manual queue hierarchy downloads without a GUI or live service."""
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 import queue
 import tempfile
@@ -52,10 +52,147 @@ class HierarchyWorkerTests(unittest.TestCase):
         self.assertIn("parent_key", {field.name for field in fields(JobItem)})
         item = JobItem("a", "A", doc("a"))
         self.assertIsNone(item.parent_key)
+        self.assertIsNone(item.row_index)
+        self.assertEqual(JobItem("b", "B", doc("b"), "a").parent_key, "a")
         with self.assertRaises(FrozenInstanceError):
             item.parent_key = "b"
+        with self.assertRaises(FrozenInstanceError):
+            item.row_index = "2"
+
+    def test_folder_options_cover_all_four_combinations(self):
+        items = [self.item("a"), self.item("b", "a"), self.item("c", "b")]
+        for manual, individual, expected, calls in (
+            (False, False, ("A.pdf", "B.pdf", "C.pdf"), 0),
+            (False, True, ("A/A.pdf", "B/B.pdf", "C/C.pdf"), 3),
+            (True, False, ("A/A.pdf", "A/B/B.pdf", "A/B/C.pdf"), 2),
+            (True, True, ("A/A.pdf", "A/B/B.pdf", "A/B/C/C.pdf"), 3),
+        ):
+            with self.subTest(manual=manual, individual=individual):
+                output = self.root / f"{manual}-{individual}"
+                output.mkdir()
+                self.settings.output_dir = str(output)
+                self.settings.manual_folder_hierarchy_enabled = manual
+                self.settings.document_subfolder_enabled = individual
+                with patch("ot_app.worker.resolve_document_folder", wraps=resolve_document_folder) as resolver:
+                    events = self.run_worker(items, tuple(items))
+                self.assertEqual(resolver.call_count, calls)
+                for item, path in zip(items, expected):
+                    self.assertEqual(self.last(events, item.key)["status"], "downloaded")
+                    self.assertEqual(self.last(events, item.key)["path"], str(output / path))
+                    self.assertTrue((output / path).is_file())
+
+    def test_parent_only_selection_uses_children_from_complete_hierarchy(self):
+        a, b = self.item("a"), self.item("b", "a", selected=False)
+        with patch("ot_app.worker.resolve_document_folder", wraps=resolve_document_folder) as resolver:
+            events = self.run_worker([a], (a, b))
+        self.assertEqual(resolver.call_count, 1)
+        self.assertEqual(self.last(events, "a")["path"], str(self.root / "A/A.pdf"))
+        self.assertEqual([call["id"] for call in self.client.downloads], ["a"])
+        self.assertEqual(self.client.searches, [])
+        self.assertFalse((self.root / "A/B").exists())
+
+    def test_parent_folders_only_resolve_shared_ancestors_once_without_their_media(self):
+        hierarchy = (self.item("a", selected=False), self.item("b", "a", False),
+                     self.item("c", "b"), self.item("d", "b"))
+        self.client.results = {"A": [doc("a")], "B": [doc("b")]}
+        with patch("ot_app.worker.resolve_document_folder", wraps=resolve_document_folder) as resolver:
+            events = self.run_worker(list(hierarchy[2:]), hierarchy)
+        self.assertEqual(resolver.call_count, 2)
+        self.assertEqual(self.client.searches, ["A", "B"])
+        self.assertEqual([call["id"] for call in self.client.downloads], ["c", "d"])
+        self.assertEqual(self.last(events, "c")["path"], str(self.root / "A/B/C.pdf"))
+        self.assertEqual(self.last(events, "d")["path"], str(self.root / "A/B/D.pdf"))
+
+    def test_leaf_skips_folder_resolution_even_when_matching_directories_exist(self):
+        a, b = self.item("a"), self.item("b", "a")
+        for match, directories in (("exact", ("B",)), ("contains", ("first B", "second B"))):
+            with self.subTest(match=match):
+                output = self.root / match
+                parent = output / "A"
+                parent.mkdir(parents=True)
+                for name in directories:
+                    (parent / name).mkdir()
+                self.settings.output_dir = str(output)
+                self.settings.document_subfolder_match = match
+                with patch("ot_app.worker.resolve_document_folder", wraps=resolve_document_folder) as resolver:
+                    events = self.run_worker([b], (a, b))
+                self.assertEqual(resolver.call_count, 1)
+                self.assertEqual(resolver.call_args.args[1].id, "a")
+                self.assertEqual(self.last(events, "b")["path"], str(parent / "B.pdf"))
+                self.assertTrue(all(not list((parent / name).iterdir()) for name in directories))
+
+    def test_root_leaf_downloads_directly_without_resolving_any_folder(self):
+        (self.root / "first A").mkdir()
+        (self.root / "second A").mkdir()
+        self.settings.document_subfolder_match = "contains"
+        with patch("ot_app.worker.resolve_document_folder", wraps=resolve_document_folder) as resolver:
+            events = self.run_worker([self.item("a")])
+        resolver.assert_not_called()
+        self.assertEqual(self.last(events, "a")["path"], str(self.root / "A.pdf"))
+
+    def test_parent_folders_still_reject_self_and_escaping_links(self):
+        a, b = self.item("a"), self.item("b", "a")
+        with tempfile.TemporaryDirectory() as outside:
+            for target in (self.root, Path(outside)):
+                with self.subTest(target=target):
+                    link = self.root / "A"
+                    link.symlink_to(target, target_is_directory=True)
+                    try:
+                        events = self.run_worker([b], (a, b))
+                        self.assertEqual(self.last(events, "b")["status"], "error")
+                        self.assertEqual(self.client.downloads, [])
+                        self.assertEqual(list(Path(outside).iterdir()), [])
+                    finally:
+                        link.unlink()
+
+    def test_manual_indices_use_complete_snapshot_and_each_ancestors_own_index(self):
+        self.settings.filename_format = "{index}-{numara}"
+        self.settings.document_subfolder_format = "{index}-{numara}"
+        hierarchy = (self.item("a"), self.item("b", "a"), self.item("c", "b"),
+                     self.item("d", "b"), self.item("e"))
+        with patch("ot_app.worker.resolve_document_folder", wraps=resolve_document_folder) as resolver:
+            events = self.run_worker([hierarchy[3]], hierarchy)
+        self.assertEqual([call.kwargs["index"] for call in resolver.call_args_list], ["1", "1.1"])
+        self.assertEqual(self.last(events, "d")["path"], str(self.root / "1-A/1.1-B/1.1.2-D.pdf"))
+        self.assertEqual([call["id"] for call in self.client.downloads], ["d"])
+
+    def test_explicit_manual_indices_override_fallback_without_rewriting_snapshot(self):
+        self.settings.filename_format = "{index}-{numara}"
+        self.settings.document_subfolder_format = "{index}-{numara}"
+        a = replace(self.item("a"), row_index="4")
+        b = replace(self.item("b", "a"), row_index="4.7")
+        events = self.run_worker([b], (a, b))
+        self.assertEqual(self.last(events, "b")["path"], str(self.root / "4-A/4.7-B.pdf"))
+        self.assertEqual((a.row_index, b.row_index), ("4", "4.7"))
+
+    def test_mismatched_explicit_index_fails_snapshot_validation_before_io(self):
+        a, b = self.item("a"), self.item("b", "a")
+        events = self.run_worker([replace(b, row_index="1.1")], (a, b))
+        self.assertTrue(any(event.kind == "fatal" for event in events))
+        self.assertEqual(self.client.constructed, 0)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_shared_root_leaves_preserve_first_document_on_filename_collision(self):
+        a = JobItem("a", "A", Document("a", "same.pdf", "A", ""))
+        b = JobItem("b", "B", Document("b", "SAME.pdf", "B", ""))
+        events = self.run_worker([a, b], (a, b))
+        self.assertEqual(self.last(events, "a")["status"], "downloaded")
+        self.assertEqual(self.last(events, "b")["status"], "error")
+        self.assertEqual([call["id"] for call in self.client.downloads], ["a"])
+        self.assertEqual((self.root / "same.pdf").read_bytes(), b"document a")
+
+    def test_parent_and_leaf_preserve_first_document_on_filename_collision(self):
+        self.settings.document_subfolder_format = "{ad}"
+        a = JobItem("a", "A", Document("a", "same.pdf", "A", ""))
+        b = JobItem("b", "B", Document("b", "SAME.pdf", "B", ""), "a")
+        events = self.run_worker([a, b], (a, b))
+        self.assertEqual(self.last(events, "a")["status"], "downloaded")
+        self.assertEqual(self.last(events, "b")["status"], "error")
+        self.assertEqual([call["id"] for call in self.client.downloads], ["a"])
+        self.assertEqual((self.root / "A/same.pdf").read_bytes(), b"document a")
 
     def test_three_levels_download_to_each_nested_folder(self):
+        self.settings.document_subfolder_enabled = True
         items = [self.item("a"), self.item("b", "a"), self.item("c", "b")]
         events = self.run_worker(items, tuple(items))
         for key, folder in (("a", "A"), ("b", "A/B"), ("c", "A/B/C")):
@@ -63,6 +200,7 @@ class HierarchyWorkerTests(unittest.TestCase):
             self.assertTrue((self.root / folder / (key.upper() + ".pdf")).is_file())
 
     def test_child_only_resolves_shared_ancestors_once_without_their_media(self):
+        self.settings.document_subfolder_enabled = True
         hierarchy = (self.item("a", selected=False), self.item("b", "a", False),
                      self.item("c", "b"), self.item("d", "b"))
         self.client.results = {"A": [doc("a")], "B": [doc("b")]}
@@ -107,6 +245,7 @@ class HierarchyWorkerTests(unittest.TestCase):
         self.assertEqual(self.client.searches, ["A", "A"])
 
     def test_parent_media_failure_does_not_block_child_metadata_and_folder(self):
+        self.settings.document_subfolder_enabled = True
         a, b = self.item("a"), self.item("b", "a")
         self.client.download_errors["a"] = OTError("media failed")
         events = self.run_worker([a, b], (a, b))
@@ -137,6 +276,7 @@ class HierarchyWorkerTests(unittest.TestCase):
         self.assertEqual(self.last(events, "c")["status"], "folder_ambiguous")
 
     def test_snapshot_survives_input_and_settings_changes(self):
+        self.settings.document_subfolder_enabled = True
         a, b = self.item("a"), self.item("b", "a")
         items, hierarchy = [b], [a, b]
         worker = DownloadWorker(self.settings, items, self.events, self.cancel,
@@ -161,11 +301,13 @@ class HierarchyWorkerTests(unittest.TestCase):
                 self.assertEqual(self.client.constructed, 0)
 
     def test_roots_only_fallback_works_without_explicit_hierarchy(self):
+        self.settings.document_subfolder_enabled = True
         events = self.run_worker([self.item("a")])
         self.assertEqual(self.last(events, "a")["status"], "downloaded")
         self.assertTrue((self.root / "A/A.pdf").is_file())
 
     def test_nested_contains_match_uses_actual_parent_directory(self):
+        self.settings.document_subfolder_enabled = True
         parent = self.root / "old A"
         child = parent / "old B"
         child.mkdir(parents=True)
@@ -176,6 +318,7 @@ class HierarchyWorkerTests(unittest.TestCase):
         self.assertEqual(self.last(events, "b")["path"], str(child / "B.pdf"))
 
     def test_nested_contains_ambiguity_does_not_download_to_root_match(self):
+        self.settings.document_subfolder_enabled = True
         parent = self.root / "A"
         (parent / "first B").mkdir(parents=True)
         (parent / "second B").mkdir()
@@ -194,6 +337,7 @@ class HierarchyWorkerTests(unittest.TestCase):
         self.assertFalse((self.root / "C").exists())
 
     def test_each_level_rejects_escape_or_self_link(self):
+        self.settings.document_subfolder_enabled = True
         a, b = self.item("a"), self.item("b", "a")
         parent = self.root / "A"
         parent.mkdir()
@@ -209,6 +353,7 @@ class HierarchyWorkerTests(unittest.TestCase):
                     link.unlink()
 
     def test_root_node_rejects_self_link_in_manual_mode_only(self):
+        self.settings.document_subfolder_enabled = True
         (self.root / "A").symlink_to(self.root, target_is_directory=True)
         events = self.run_worker([self.item("a")])
         self.assertEqual(self.last(events, "a")["status"], "error")
@@ -244,6 +389,7 @@ class HierarchyWorkerTests(unittest.TestCase):
         self.assertEqual(self.last(events, "b")["path"], str(self.root / "B.pdf"))
 
     def test_filename_collision_in_shared_nested_folder_keeps_first_document(self):
+        self.settings.document_subfolder_enabled = True
         self.settings.document_subfolder_format = "{ad}"
         a = JobItem("a", "A", Document("a", "A.pdf", "shared", ""))
         b = JobItem("b", "B", Document("b", "same.pdf", "shared", ""), "a")
@@ -254,6 +400,7 @@ class HierarchyWorkerTests(unittest.TestCase):
         self.assertEqual((self.root / "shared/shared/same.pdf").read_bytes(), b"document b")
 
     def test_nested_related_media_stays_with_primary_document(self):
+        self.settings.document_subfolder_enabled = True
         self.settings.download_related_forms = True
         self.settings.download_related_attachments = True
         a, b = self.item("a"), self.item("b", "a")
@@ -270,6 +417,7 @@ class HierarchyWorkerTests(unittest.TestCase):
                          ["tds_document", "tds_form", "tds_attachment"])
 
     def test_deep_required_ancestors_are_resolved_iteratively(self):
+        self.settings.document_subfolder_enabled = True
         hierarchy = tuple(self.item(str(index), str(index - 1) if index else None)
                           for index in range(1100))
         with patch("ot_app.worker.resolve_document_folder", return_value=self.root) as resolver:

@@ -1,5 +1,24 @@
 # Verification record — 2026-11-06
 
+## Table context menu, number editing and layout
+
+- Full command: `/private/tmp/ot-client-review-venv/bin/python -B -m unittest discover -s tests -q`.
+- Final result: **443 tests; 442 passed, 1 skipped** (native Windows DPAPI). Native Tk and loopback HTTP checks ran on macOS.
+- Context-menu regressions cover single/multiple selections, unselected rows, blank/header clicks, busy state and Aqua secondary/control-click. Number-edit tests cover literal validation, stale-result reset, stable identity/hierarchy, persistence, modal validation/cancel and collision-safe undo.
+- At 1050×710 with hierarchy enabled, four full data rows are visible and default columns fit without horizontal scrolling. Metric cards retain their existing compact-window behavior.
+- All **38** Python/PYW files compile and pass Python 3.10 grammar checks; Ruff `E9,F` and `git diff --check` pass. Independent review approved with no actionable findings.
+- Native Windows UI/registry and live corporate OT were not exercised. No new dependencies, schema changes or downloaded-file mutations.
+
+
+## Independent folder modes, table ordering and index templates
+
+- Full command: `/private/tmp/ot-client-review-venv/bin/python -B -m unittest discover -s tests -q`.
+- Final result: **425 tests; 424 passed, 1 skipped** (native Windows current-user DPAPI). Real Tk and loopback HTTP tests ran with native GUI/socket access. Restricted Tk checks could not obtain valid macOS display scaling; native runs passed.
+- Added 45 tests covering all four folder-mode combinations, parent-only directories from complete queue snapshots, leaf directory-scan bypass, independent settings persistence, the highlighted hierarchy card at 1050×710, filename/folder index expansion, selected-subset indices, related-file index inheritance, collisions, subtree ordering, undo/save/restart, outside-click exclusions, and modifier/lock key behavior.
+- All **37** Python/PYW files compile in memory and pass Python 3.10 grammar checks. Ruff `E9,F` and `git diff --check` pass. Dependencies, CLI, registry schema and list export formats are unchanged; existing downloaded files are not moved or renamed.
+- Independent final review identified a keyboard modifier-mask portability issue. Modifier-specific Tk bindings and regression tests fixed it; scoped re-review approved the implementation with no remaining actionable findings. The full suite above includes the fix.
+- Not executed: live corporate OT access or native Windows registry/DPAPI/junction/UI verification. Tk behavior was exercised on macOS; Windows modifier/lock paths have tests but still require execution on Windows. This change preserves the existing per-batch filename-ownership boundary and path-based filesystem safety limitations.
+
 ## Manual folder hierarchy
 
 - Full command: `/private/tmp/ot-client-review-venv/bin/python -B -m unittest discover -s tests -q`.

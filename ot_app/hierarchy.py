@@ -98,18 +98,37 @@ def _validate_sibling_block(
             raise HierarchyError("Aynı üst satıra bağlı, ardışık kardeş satırları seçin.")
 
 
+def _reorder_sibling_block(
+    entries: tuple[HierarchyEntry, ...], roots: Sequence[int], ends: dict[str, int], direction: str
+) -> tuple[HierarchyEntry, ...]:
+    start, stop = roots[0], ends[entries[roots[-1]].key]
+    parent_key = entries[start].parent_key
+    if direction == "up":
+        previous = next((index for index in range(start - 1, -1, -1)
+                         if entries[index].parent_key == parent_key), None)
+        if previous is None:
+            return entries
+        return entries[:previous] + entries[start:stop] + entries[previous:start] + entries[stop:]
+    if stop == len(entries) or entries[stop].parent_key != parent_key:
+        return entries
+    next_stop = ends[entries[stop].key]
+    return entries[:start] + entries[stop:next_stop] + entries[start:stop] + entries[next_stop:]
+
+
 def move_hierarchy(
     entries: Sequence[HierarchyEntry], selected_keys: Iterable[str], direction: str
 ) -> tuple[HierarchyEntry, ...]:
-    """Indent/outdent a consecutive sibling block, carrying its whole subtrees.
+    """Reorder or indent/outdent consecutive siblings with their whole subtrees.
 
     Selected descendants of selected ancestors are ignored. Indenting the first
     sibling or outdenting roots leaves the forest unchanged. Outdented subtrees
-    follow their former parent's entire remaining subtree.
+    follow their former parent's entire remaining subtree. Up/down swaps the
+    block with one adjacent sibling subtree, retaining every parent relationship;
+    a block already at its parent's boundary is unchanged.
     """
     validate_hierarchy(entries)
-    if direction not in ("indent", "outdent"):
-        raise HierarchyError("Taşıma yönü 'indent' veya 'outdent' olmalıdır.")
+    if direction not in ("indent", "outdent", "up", "down"):
+        raise HierarchyError("Taşıma yönü 'indent', 'outdent', 'up' veya 'down' olmalıdır.")
     selected = _selected_keys(entries, selected_keys)
     original = tuple(entries)
     if not selected:
@@ -117,6 +136,8 @@ def move_hierarchy(
     ends = _subtree_ends(entries)
     roots = _selected_roots(entries, selected, ends)
     _validate_sibling_block(entries, roots, ends)
+    if direction in ("up", "down"):
+        return _reorder_sibling_block(original, roots, ends, direction)
     first = entries[roots[0]]
     parent_key = first.parent_key
     by_key = {entry.key: entry for entry in entries}

@@ -1,11 +1,11 @@
-"""Modal dialogs for bulk input and explicit document disambiguation."""
+"""Modal dialogs for document input, number editing and explicit disambiguation."""
 
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
 from tkinter import font as tkfont
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from .documents import parse_document_text
 
@@ -203,6 +203,78 @@ class BulkInputDialog(tk.Toplevel):
             width = max(200, event.width - 55)
             self._hint.configure(wraplength=width)
             self._count_label.configure(wraplength=width)
+
+
+class DocumentNumberDialog(tk.Toplevel):
+    """Edit one literal identifier, retaining the modal on validation failure."""
+
+    def __init__(
+        self, parent: tk.Misc, number: str, *, validate: Callable[[str], str]
+    ) -> None:
+        super().__init__(parent)
+        self.withdraw()
+        self.title("Belge numarasını düzenle")
+        self.configure(background="#F3F6FB")
+        self.transient(parent.winfo_toplevel())
+        self.result: str | None = None
+        self._validate = validate
+        self.number_var = tk.StringVar(self, value=number)
+        self.error_var = tk.StringVar(self)
+        self.columnconfigure(0, weight=1)
+        content = ttk.Frame(self, padding=(24, 22))
+        content.grid(row=0, column=0, sticky="nsew")
+        content.columnconfigure(0, weight=1)
+        ttk.Label(
+            content, text="Belge numarasını düzenle", style="Body.TLabel",
+            font=(_family(self), 15, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            content, text="Yeni belge numarasını girin. Değişiklik sonrası belge yeniden indirilmeye hazır olur.",
+            style="Muted.TLabel", wraplength=470, justify="left",
+        ).grid(row=1, column=0, sticky="ew", pady=(8, 14))
+        self.entry = ttk.Entry(content, textvariable=self.number_var)
+        self.entry.grid(row=2, column=0, sticky="ew")
+        ttk.Label(
+            content, textvariable=self.error_var, foreground="#B42336",
+            wraplength=470, justify="left",
+        ).grid(row=3, column=0, sticky="ew", pady=(8, 16))
+        controls = ttk.Frame(content)
+        controls.grid(row=4, column=0, sticky="e")
+        self.cancel_button = ttk.Button(
+            controls, text="Vazgeç", style="Subtle.TButton", command=self._cancel,
+        )
+        self.cancel_button.grid(row=0, column=0, padx=(0, 10))
+        self.save_button = ttk.Button(
+            controls, text="Kaydet", style="Accent.TButton", command=self._accept,
+        )
+        self.save_button.grid(row=0, column=1)
+        self.bind("<Return>", self._accept)
+        self.cancel_button.bind("<Return>", self._cancel)
+        self.bind("<Escape>", self._cancel)
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.resizable(False, False)
+        center(self, parent, 530, 285)
+        self.deiconify()
+        self.wait_visibility()
+        self.grab_set()
+        self.entry.focus_set()
+        self.entry.selection_range(0, tk.END)
+        self.wait_window(self)
+
+    def _accept(self, _event: tk.Event | None = None) -> str:
+        try:
+            self.result = self._validate(self.number_var.get())
+        except ValueError as exc:
+            self.error_var.set(str(exc))
+            self.entry.focus_set()
+        else:
+            self.destroy()
+        return "break"
+
+    def _cancel(self, _event: tk.Event | None = None) -> str:
+        self.result = None
+        self.destroy()
+        return "break"
 
 
 class CandidateDialog(tk.Toplevel):

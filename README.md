@@ -33,14 +33,16 @@ Başka bir uygun Python seçtiyseniz aynı komutlarda onu kullanın. `python ot_
 | Toplu ekleme | Toplu ekle penceresine Excel'den veya metin dosyasından yapıştırın. Eklemeden önce benzersiz belge sayısını görün. |
 | Dosyadan alma | TXT, CSV, TSV veya JSON dosyası seçin. `.xlsx` dosyasından hücreleri kopyalayıp Toplu ekle alanına yapıştırın. |
 | Çoklu seçim | Ctrl ve Shift ile seçin. Ctrl+A yalnızca filtrede görünen satırları seçer. |
-| Silme | Seçileni kaldır veya Delete. İndirilen dosyalar silinmez. |
-| Geri alma | Liste işlemleri → Son liste işlemini geri al; liste odaktayken Ctrl+Z. Son kaldırma, temizleme veya girinti değişikliği geri alınabilir. |
+| Silme | Tabloda sağ tık → Seçileni kaldır veya Delete. İndirilen dosyalar silinmez. |
+| Sıra değiştirme | Liste odaktayken ↑ / ↓ seçili kardeş belgeleri alt belgeleriyle birlikte taşır. |
+| Seçimi temizleme | Tablo dışına tıklayın. Seçime bağlı düğmeler ve Liste işlemleri menüsü seçimi korur. |
+| Geri alma | Liste işlemleri → Son liste işlemini geri al; liste odaktayken Ctrl+Z. Son kaldırma, temizleme, sıralama veya girinti değişikliği geri alınabilir. |
 | Listeyi temizleme | Liste işlemleri → Tüm listeyi temizle. |
 | Listeyi dışa aktarma | Liste işlemleri → Listeyi dışa aktar. Seçim varsa seçili belgeler, yoksa tüm liste aktarılır. |
 | Sonuç raporu | Liste işlemleri → Sonuç raporunu dışa aktar. Excel uyumlu UTF-8 BOM ve noktalı virgülle CSV üretir. |
 | Kopyalama | Liste odaktayken Ctrl+C seçili belge numaralarını kopyalar. |
 | Listede arama | Filtre alanına yazın veya Ctrl+F. Belge numarası, başlık ve açıklama aranır. |
-| Seçili indirme | Seçileni indir. Tüm listeyi yeniden çalıştırmak için Listeyi indir. |
+| Seçili indirme | Tabloda sağ tık → Seçileni indir. Tüm listeyi yeniden çalıştırmak için Listeyi indir. |
 | Yeniden deneme | Liste işlemleri → Sorunluları yeniden dene. Eşleşme seçimi gereken satırlar ayrı ele alınır. |
 | Durdurma | Durdur. Bekleyen işler iptal edilir; sürmekte olan ağ isteğinin yanıtı/zaman aşımı beklenebilir. |
 | Dosyayı açma | Satırı seçip Dosyayı aç veya çift tıklama. |
@@ -126,12 +128,21 @@ dosya adını belirleyebilirsiniz. Etiketleri doğrudan bu alana yazın.
 | `{numara}` | Sunucudaki belge numarası. |
 | `{ad}` | Belge adı / açıklaması; boşsa belge numarası kullanılır. |
 | `{revizyon}` | Belgenin revizyon numarası; sıfır da gösterilir. |
+| `{index}` | Hiyerarşi açıkken `1.2.1` gibi ağaç indeksi; kapalıyken tam listedeki 1'den başlayan satır sırası. |
 
 Örneğin `{numara} - {ad} - Rev{revizyon}` formatı,
 `PR-001 - Kalite Prosedürü - Rev3.pdf` gibi bir ad üretir. Dosya uzantısını yazmanız
 gerekmez; bilinen uzantı korunur, eksikse sunucu yanıtından belirlenir. Varsayılan
 `{numara}` mevcut adlandırmayı korur. Format ayarlarla birlikte saklanır ve sonraki
 indirmelere uygulanır; önceden indirilen dosyalar yeniden adlandırılmaz.
+
+`{index}` dosya ve klasör adlarında kullanılabilir; örneğin `{index} - {numara}`.
+Filtreleme, yalnız seçili belgeleri indirme ve sorunluları yeniden deneme indeksleri
+baştan numaralandırmaz. İndeksler indirme başında sabitlenir. Listeyi yeniden
+sıralamak veya hiyerarşiyi değiştirmek sonraki indirmelerin adlarını değiştirebilir;
+indeks kalıcı belge kimliği değildir. Yalnız `{index}` kullanıldığında aynı hedef adı
+sonraki oturumda başka bir belgeye ait olabilir; mevcut dosya güncelleme kuralları
+uygulanır. Belge numarasını da içeren formatlar bu karışıklığı azaltır.
 
 En az bir etiket kullanın. Bilinmeyen etiketler, yol ayırıcıları ve geçersiz dosya
 adı karakterleri kaydetmeden önce bildirilir. Belge bilgilerindeki geçersiz
@@ -141,7 +152,9 @@ numarasını ekleyebilir veya ayrı bir hedef klasör seçebilirsiniz.
 
 ### Belgeye özel klasörler
 
-Depolama sekmesinde **Her belgeyi özel bir klasöre kaydet** seçeneği varsayılan olarak kapalıdır; iki klasör modu da kapalıyken dosyalar doğrudan indirme klasörüne kaydedilir. Açıldığında **Klasör adı formatı** alanında aynı `{numara}`, `{ad}` ve `{revizyon}` etiketlerini kullanabilirsiniz. Varsayılan `{numara}` formatı `PR-001.pdf` için `PR-001` klasörünü oluşturur; klasör adına otomatik dosya uzantısı eklenmez. Önizleme yazarken güncellenir. İki mod da kapatılırsa girilen format korunur ve kullanılmaz.
+Depolama sekmesinde **Her belgeyi özel bir klasöre kaydet** seçeneği varsayılan olarak kapalıdır ve manuel hiyerarşiden bağımsızdır. Açıldığında **Klasör adı formatı** alanında `{numara}`, `{ad}`, `{revizyon}` ve `{index}` etiketlerini kullanabilirsiniz. Varsayılan `{numara}` formatı `PR-001.pdf` için `PR-001` klasörünü oluşturur veya mevcut eşleşen klasörü kullanır; klasör adına otomatik dosya uzantısı eklenmez. Önizleme yazarken güncellenir. İki seçenek de kapatılırsa girilen format korunur ve kullanılmaz.
+
+Özel klasör kapalıyken belgeye özel alt klasör aranmaz veya oluşturulmaz. Belge doğrudan indirme klasörüne ya da hiyerarşideki üst belgesinin klasörüne kaydedilir. **İstisna:** Hiyerarşi açıkken alt belgesi bulunan her belge için klasör gerekir; üst belge ve alt belgeleri bu klasör altında yerleşir. Alt belge bulunması yalnız indirilecek seçimden değil, tam listeden belirlenir.
 
 - **Birebir eşleşme:** Aynı adlı alt klasör kullanılır; yoksa oluşturulur. Varsayılan seçenektir.
 - **İçerme:** Üretilen adı içeren alt klasör kullanılabilir; örneğin `PR-001` için `PR-001 Kalite`. Tam eşleşme varsa önceliklidir. Tek eşleşme kullanılır, hiç yoksa üretilen adla klasör oluşturulur.
@@ -152,16 +165,28 @@ Dosya güncelleme davranışı değişmez: mevcut dosyayla içerik aynıysa yeni
 
 ### Manuel klasör hiyerarşisi
 
-Depolama sekmesindeki **Klasör hiyerarşisini manuel düzenle** seçeneği varsayılan olarak kapalıdır. Açıldığında diğer klasör seçeneği devre dışı kalır; mod değiştirmek için önce etkin seçeneği kapatın. İki mod aynı klasör adı formatını ve eşleştirme ayarını kullanır.
+Depolama sekmesinde ayrı bir kartta gösterilen **Klasör hiyerarşisini manuel düzenle** seçeneği varsayılan olarak kapalıdır. Özel belge klasörü seçeneğiyle birlikte açılabilir. İki seçenek aynı klasör adı formatını ve eşleştirme ayarını kullanır.
 
 Belgeler tablosunda **Index** sütunu görünür. İlk yapı `1, 2, 3, …` şeklindedir. Tabloya odaklanıp bir belgeyi seçin:
 
 - **Sağ ok:** Belgeyi önceki kardeş belgenin son alt belgesi yapar. `1, 2, 3` sırasında ikinci belgeyi girintilemek `1, 1.1, 2` üretir. Son belge üzerinde iki sağ ok sırasıyla `1.2` ve `1.1.1` üretir.
 - **Sol ok:** Belgeyi bir üst seviyeye, eski üst belgesinin kalan alt ağacının arkasına taşır. Her iki yönde tüm alt belgeler birlikte taşınır.
+- **Yukarı / aşağı ok:** Seçili belge veya ardışık kardeş bloğu önceki/sonraki kardeşiyle, alt belgeleriyle birlikte yer değiştirir. Üst belge değişmez; ilk/son kardeşte ilgili yön etkisizdir. Hiyerarşi kapalıyken de çalışır; saklanan ağaç ilişkileri korunur ve görünmeyen alt belgeler birlikte taşınır. Shift/Ctrl ile ok tuşlarının seçim/gezinme davranışı korunur.
 - Aynı üst belgeye bağlı ardışık kardeşleri Ctrl / Shift ile seçip birlikte taşıyabilirsiniz. Seçili üst belgenin alt belgeleri ayrıca taşınmaz. Uyumsuz seçimlerde hiçbir satır değişmez.
-- **Ctrl+Z / Son liste işlemini geri al:** Son girinti, kaldırma veya temizleme işlemini geri alır. Yeni eklenen belgeler kökte korunur. Üst belgeyi kaldırmak seçilmemiş alt belgeleri silmez; bunlar en yakın kalan üst belgeye bağlanır.
+- **Ctrl+Z / Son liste işlemini geri al:** Son sıralama, girinti, kaldırma veya temizleme işlemini geri alır. Yeni eklenen belgeler kökte korunur. Üst belgeyi kaldırmak seçilmemiş alt belgeleri silmez; bunlar en yakın kalan üst belgeye bağlanır.
 
-İndirme sırasında veya arama/durum filtresi açıkken girinti değiştirilemez. Filtrelenmiş görünümde indeksler tam listedeki değerleridir. Yeni eklenen/içe aktarılan belgeler kökte başlar. İndeksler yalnızca görünüm içindir; klasör adları her belgenin kendi bilgileriyle formattan üretilir. Örneğin `A → B → C` ağacı `{numara}` ile `A/B/C` klasörlerini oluşturur; her belge kendi klasörüne kaydedilir.
+İndirme sırasında veya arama/durum filtresi açıkken sıra ve girinti değiştirilemez. Filtrelenmiş görünümde indeksler tam listedeki değerleridir. Yeni eklenen/içe aktarılan belgeler kökte başlar. İndeksler `{index}` etiketiyle adlandırmada da kullanılabilir; her klasör kendi belgesinin indeksini kullanır.
+
+`A → B → C` ağacı ve `{numara}` formatı için, indirme klasörüne göre hedefler:
+
+| Özel klasör | Hiyerarşi | Dosya yolları |
+|---|---|---|
+| Kapalı | Kapalı | `A.pdf`, `B.pdf`, `C.pdf` |
+| Açık | Kapalı | `A/A.pdf`, `B/B.pdf`, `C/C.pdf` |
+| Kapalı | Açık | `A/A.pdf`, `A/B/B.pdf`, `A/B/C.pdf` |
+| Açık | Açık | `A/A.pdf`, `A/B/B.pdf`, `A/B/C/C.pdf` |
+
+Tablo dışındaki tıklamalar satır seçimini temizler. Tablo başlığı ve kaydırma çubukları tablo alanıdır. Sağ tık menüsü, **Dosyayı aç**, **Eşleşmeyi seç** ve **Liste işlemleri** menüsü seçimi korur.
 
 **Birebir / İçerme** eşleştirmesi her seviyede kendi üst klasörü içinde uygulanır. Yalnızca alt belgeyi indirirseniz üst belgelerin bilgileri ve klasörleri çözülür; üst belgelerin dosyaları indirilmez. Çözülemeyen veya belirsiz üst belge, alt belgeye açıklayıcı hata verir. Üst belgenin dosya indirmesi başarısız olsa da klasörü çözüldüyse alt belgeler işlenebilir. Form ve ekler ait oldukları belgenin klasöründe kalır.
 
@@ -171,7 +196,7 @@ Ağaç, listeyle birlikte otomatik kaydedilir; mod kapatılıp açıldığında 
 
 Depolama sekmesindeki **İlgili formları da indir** ve **İlgili ekleri de indir** seçenekleri bağımsızdır ve varsayılan olarak kapalıdır. Açık olan seçenekler için ana belge indirildikten sonra detay yanıtındaki `properties.forms` ve `properties.attachments` kimlikleri okunur. Form bilgileri `tds_form/{id}`, ek bilgileri `tds_attachment/{id}` üzerinden; içerikleri bu adreslerin `/media` yolundan alınır.
 
-İlgili dosyalar ana belgeyle **aynı klasöre** kaydedilir. Dosya adı formatı her form ve ekin kendi numarası, adı ve revizyonuyla uygulanır. Ana belge için mevcut bir alt klasör eşleşmişse ilgili dosyalar da o klasöre kaydedilir. Aynı türde tekrarlanan kimlikler belge başına bir kez işlenir. Yalnızca ana dokümanın doğrudan ilişkileri izlenir; form/ekler üzerinden yeni ilişkiler aranmaz.
+İlgili dosyalar ana belgeyle **aynı klasöre** kaydedilir. Dosya adı formatı her form ve ekin kendi numarası, adı ve revizyonuyla uygulanır; `{index}` ise ana belgenin tablo indeksidir. Bu dosyalar için ayrı satır numarası üretilmez. Yalnız `{index}` kullanan adlar ana belgeyle çakışırsa mevcut çakışma kontrolü önceki dosyayı korur. Ana belge için mevcut bir alt klasör eşleşmişse ilgili dosyalar da o klasöre kaydedilir. Aynı türde tekrarlanan kimlikler belge başına bir kez işlenir. Yalnızca ana dokümanın doğrudan ilişkileri izlenir; form/ekler üzerinden yeni ilişkiler aranmaz.
 
 Ana belge **Güncel** olsa da ilişkili dosyalar kontrol edilir. Bir form veya ek alınamazsa ana belge ve tamamlanmış dosyalar korunur; kalan dosyalar ve sonraki belgeler işlenir. Satır **Hata** durumunda, tamamlanan form/ek sayıları ve hata özetiyle gösterilir (ilk beş hata listelenir). **Sorunluları yeniden dene** ilişkileri yeniden okur; aynı içerikteki dosyalar tekrar yazılmaz. İptal kalan işlemleri durdurur, tamamlanmış dosyaları silmez. Seçenekler kapalıyken ek detay isteği yapılmaz.
 
@@ -283,3 +308,9 @@ Testler gerçek OT hesabına bağlanmaz. Açılan test pencereleri otomatik kapa
 - Python Tkinter: https://docs.python.org/3/library/tkinter.html
 - Windows kayıt defteri API: https://docs.python.org/3/library/winreg.html
 - Microsoft DPAPI: https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata
+
+### Belge numarasını düzenleme
+
+Tek bir satır seçip sağ tık menüsünden **Belge numarasını düzenle…** işlemini kullanın. Enter kaydeder, Escape vazgeçer. Boş veya listedeki başka bir numarayla birebir aynı değer kabul edilmez. Satırın sırası ve hiyerarşisi korunur; eski eşleşme ve indirme bilgisi temizlenir. Diskteki dosyalar değiştirilmez. Değişiklik otomatik kaydedilir ve Ctrl+Z ile geri alınabilir; eski numara sonradan başka satıra eklenmişse geri alma listeyi değiştirmeden uyarı verir.
+
+Seçili satıra sağ tıklamak çoklu seçimi korur; başka satıra sağ tıklamak yalnız o satırı seçer. İndirme ve kaldırma seçimin tamamına uygulanır. Düzenleme yalnız tek seçimde kullanılabilir. Başlık veya boş alanda satır menüsü açılmaz.

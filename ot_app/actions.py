@@ -1,13 +1,19 @@
 """User-initiated document list actions, kept separate from the Tk shell."""
+from dataclasses import dataclass, replace
 from itertools import chain
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
-from .dialogs import BulkInputDialog, CandidateDialog
+from .dialogs import BulkInputDialog, CandidateDialog, DocumentNumberDialog
 from .documents import merge_document_numbers, parse_document_text, read_document_file, write_csv_report, write_document_file
 from .hierarchy import HierarchyEntry, HierarchyError, move_hierarchy, remove_hierarchy, validate_hierarchy
 from .queue_model import QueueRow
 from .views import STATUS_LABELS
+
+
+@dataclass(frozen=True)
+class _DocumentNumberEditUndo:
+    original: QueueRow
 
 
 class DocumentActions:
@@ -32,10 +38,10 @@ class DocumentActions:
 
     def change_hierarchy(self, direction):
         view = self.documents_view
-        if self.busy or not view.manual_hierarchy:
+        if self.busy or (direction in ("indent", "outdent") and not view.manual_hierarchy):
             return "break"
         if view.search_var.get().strip() or view.filter_var.get() != "Tüm belgeler":
-            self.set_notice("Hiyerarşiyi düzenlemek için arama ve durum filtrelerini temizleyin.", "warning")
+            self.set_notice("Sıralamayı veya hiyerarşiyi düzenlemek için arama ve durum filtrelerini temizleyin.", "warning")
             return "break"
         entries = self._hierarchy_entries()
         try:
@@ -51,8 +57,29 @@ class DocumentActions:
             focus = view.tree.focus()
             if focus:
                 view.tree.see(focus)
-            self.set_notice("Klasör hiyerarşisi güncellendi. Ctrl+Z ile geri alabilirsiniz.")
+            change = "Belge sıralaması" if direction in ("up", "down") else "Klasör hiyerarşisi"
+            self.set_notice(f"{change} güncellendi. Ctrl+Z ile geri alabilirsiniz.")
         return "break"
+
+    def clear_selection_outside(self, event):
+        """Clear row selection for unrelated main-window clicks without consuming them."""
+        widget = event.widget
+        if not hasattr(widget, "winfo_toplevel") or widget.winfo_toplevel() is not self:
+            return
+        view = self.documents_view
+        excluded = (view.table_area, view.context_menu, view.open_file_button,
+                    view.choose_button, view.menu_button, view.list_menu)
+        while widget is not self:
+            if widget in excluded:
+                return
+            widget = widget.master
+        tree = view.tree
+        selection = tree.selection()
+        if not selection and not tree.focus():
+            return
+        tree.selection_remove(selection)
+        tree.focus("")
+        self.on_selection()
 
     def numbers(self):
         return [row.number for row in self.rows.values()]
@@ -114,6 +141,43 @@ class DocumentActions:
         except (OSError, ValueError, UnicodeError) as exc:
             messagebox.showerror("Liste okunamadı", str(exc), parent=self)
 
+    def _validate_document_number_edit(self, key, raw):
+        numbers = merge_document_numbers([], [raw])
+        if not numbers:
+            raise ValueError("Belge numarasını girin.")
+        number = numbers[0]
+        if any(row.number == number for other_key, row in self.rows.items() if other_key != key):
+            raise ValueError("Bu belge numarası listede zaten var.")
+        merge_document_numbers([], [number if row_key == key else row.number
+                                    for row_key, row in self.rows.items()])
+        return number
+
+    def edit_document_number(self):
+        """Rename one queue identity; its old download results remain available to undo."""
+        selected = self.selected_rows()
+        if self.busy or len(selected) != 1:
+            return
+        key = selected[0].key
+        dialog = DocumentNumberDialog(
+            self, selected[0].number,
+            validate=lambda raw: self._validate_document_number_edit(key, raw),
+        )
+        if dialog.result is None or self.busy or key not in self.rows:
+            return
+        try:
+            number = self._validate_document_number_edit(key, dialog.result)
+        except ValueError as exc:
+            self.set_notice(str(exc), "warning")
+            return
+        row = self.rows[key]
+        if number == row.number:
+            return
+        self._undo = _DocumentNumberEditUndo(replace(row))
+        self.rows[key] = QueueRow(number, key=key, parent_key=row.parent_key)
+        self.schedule_document_save()
+        self.refresh_table()
+        self.set_notice("Belge numarası güncellendi. Ctrl+Z ile geri alabilirsiniz.")
+
     def remove_selected(self):
         if self.busy:
             return
@@ -140,6 +204,9 @@ class DocumentActions:
 
     def undo_remove(self):
         if self.busy or not self._undo:
+            return
+        if isinstance(self._undo, _DocumentNumberEditUndo):
+            self._undo_document_number_edit(self._undo)
             return
         current = dict(self.rows)
         by_number = {row.number: row for row in current.values()}
@@ -175,6 +242,22 @@ class DocumentActions:
         self.schedule_document_save()
         self.refresh_table()
         self.set_notice("Son liste işlemi geri alındı.")
+
+    def _undo_document_number_edit(self, snapshot):
+        original = snapshot.original
+        if original.key not in self.rows:
+            self.set_notice("Geri alınamadı: düzenlenen belge artık listede değil.", "warning")
+            return
+        try:
+            self._validate_document_number_edit(original.key, original.number)
+        except ValueError as exc:
+            self.set_notice(f"Geri alınamadı: {exc}", "warning")
+            return
+        self.rows[original.key] = replace(original)
+        self._undo = None
+        self.schedule_document_save()
+        self.refresh_table()
+        self.set_notice("Belge numarası değişikliği geri alındı.")
 
     def copy_selected(self):
         rows = self.selected_rows()
@@ -231,8 +314,8 @@ class DocumentActions:
             row.document = dialog.result
             row.chosen = True
             row.status = "pending"
-            row.message = "Eşleşme seçildi. Seçileni indir ile devam edin."
+            row.message = "Eşleşme seçildi. Sağ tık → Seçileni indir ile devam edin."
             row.candidates = ()
             self.refresh_table()
             self.documents_view.tree.selection_set(row.key)
-            self.set_notice(f"{row.number} için eşleşme seçildi. İndirmek için Seçileni indir düğmesini kullanın.")
+            self.set_notice(f"{row.number} için eşleşme seçildi. İndirmek için sağ tık → Seçileni indir seçeneğini kullanın.")

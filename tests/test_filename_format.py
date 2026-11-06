@@ -102,5 +102,40 @@ class FolderFormatTests(unittest.TestCase):
                 validate_folder_format(value)
 
 
+class IndexFormatTests(unittest.TestCase):
+    def setUp(self):
+        self.document = Document("id", "DOC.pdf", "Title", "", 3)
+
+    def test_index_is_a_valid_filename_and_folder_tag(self):
+        for validate in (validate_filename_format, validate_folder_format):
+            validate("{index} - {numara}")
+            validate("{index}")
+
+    def test_flat_and_hierarchical_indices_expand_in_both_formats(self):
+        for index in ("1", "12", "1.2.3"):
+            with self.subTest(index=index):
+                self.assertEqual(
+                    format_document_filename("{index} - {numara} - {index}", self.document, index=index),
+                    f"{index} - DOC - {index}.pdf",
+                )
+                self.assertEqual(
+                    format_document_folder("{index} - {numara}", self.document, index=index),
+                    f"{index} - DOC",
+                )
+
+    def test_index_context_is_required_only_for_index_templates(self):
+        for formatter in (format_document_filename, format_document_folder):
+            for index in (None, "", "0", "01", "1.0", "1..2", "1/2", "../1", "-1", "1\n", 1):
+                with self.subTest(formatter=formatter.__name__, index=index):
+                    with self.assertRaisesRegex(ValueError, "[İi]nd[ei]ks"):
+                        formatter("{index}", self.document, index=index)
+            formatter("{numara}", self.document)
+
+    def test_index_like_metadata_is_not_expanded_again(self):
+        document = Document("id", "DOC.pdf", "{index}", "", 0)
+        self.assertEqual(format_document_filename("{ad}-{index}", document, index="2"), "{index}-2.pdf")
+        self.assertEqual(format_document_folder("{ad}-{index}", document, index="2"), "{index}-2")
+
+
 if __name__ == "__main__":
     unittest.main()

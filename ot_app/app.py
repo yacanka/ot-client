@@ -65,6 +65,8 @@ class Application(DocumentActions, tk.Tk):
                         "warning" if startup_warning else "info")
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.bind("<Control-f>", self.focus_filter)
+        for sequence in ("<Button-1>", "<Button-2>", "<Button-3>"):
+            self.bind(sequence, self.clear_selection_outside, add="+")
         self._poll_after = self.after(80, self.poll_events)
 
     def _build_shell(self):
@@ -128,7 +130,7 @@ class Application(DocumentActions, tk.Tk):
             "start": self.start_all, "selected": self.start_selected, "cancel": self.cancel_job,
             "settings": lambda: self.show_view("settings"), "choose": self.choose_candidate,
             "open_file": self.open_selected_file, "open_folder": self.open_output_folder,
-            "hierarchy": self.change_hierarchy,
+            "hierarchy": self.change_hierarchy, "edit": self.edit_document_number,
         }
         self.documents_view = DocumentsView(self.content, callbacks)
         self.settings_view = SettingsView(self.content, self.settings, self.save_settings, self.test_connection)
@@ -242,11 +244,13 @@ class Application(DocumentActions, tk.Tk):
             view.detail_var.set("Seçili belgeleri indirebilir, kaldırabilir veya Ctrl+C ile kopyalayabilirsiniz.")
         else:
             view.detail_var.set("Ctrl / Shift ile çoklu seçim yapın. Ctrl+A tüm görünen belgeleri seçer.")
-        if view.manual_hierarchy:
-            hint = ("Hiyerarşiyi düzenlemek için filtreleri temizleyin." if
-                    view.search_var.get().strip() or view.filter_var.get() != "Tüm belgeler" else
-                    "← Üst seviye / → Alt seviye / Ctrl+Z Geri al")
-            view.detail_var.set((view.detail_var.get() + "  ·  " if selected else "Ctrl / Shift: çoklu seçim.  ") + hint)
+        if view.search_var.get().strip() or view.filter_var.get() != "Tüm belgeler":
+            hint = "Sıra ve hiyerarşiyi düzenlemek için filtreleri temizleyin."
+        else:
+            hint = "↑ ↓ Sırayı değiştir / Ctrl+Z Geri al"
+            if view.manual_hierarchy:
+                hint += " / ← Üst seviye / → Alt seviye"
+        view.detail_var.set(view.detail_var.get() + "  ·  " + hint)
 
     def schedule_document_save(self):
         self._rebuild_hierarchy_indices()
@@ -373,12 +377,17 @@ class Application(DocumentActions, tk.Tk):
         self._job_failed = False
         requested = {row.key for row in rows}
         rows = [row for row in self.rows.values() if row.key in requested]
+        # Capture full-queue positions before selecting a subset or retry batch.
+        indices = (hierarchy_indices(self._hierarchy_entries()) if settings.manual_folder_hierarchy_enabled
+                   else {key: str(index) for index, key in enumerate(self.rows, 1)})
         hierarchy = tuple(
-            JobItem(row.key, row.number, row.document if row.chosen else None, row.parent_key)
+            JobItem(row.key, row.number, row.document if row.chosen else None, row.parent_key,
+                    row_index=indices[row.key])
             for row in self.rows.values()
         ) if settings.manual_folder_hierarchy_enabled else None
         items = ([item for item in hierarchy if item.key in requested] if hierarchy is not None else
-                 [JobItem(row.key, row.number, row.document if row.chosen else None) for row in rows])
+                 [JobItem(row.key, row.number, row.document if row.chosen else None,
+                          row_index=indices[row.key]) for row in rows])
         for row in rows:
             row.status, row.message, row.size = "pending", "İşlem sırasına alındı.", None
             row.candidates = ()

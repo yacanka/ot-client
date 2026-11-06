@@ -132,8 +132,6 @@ class AppSettings:
             raise SettingsValidationError("filename_format", str(error)) from None
         if self.document_subfolder_match not in ("exact", "contains"):
             raise SettingsValidationError("document_subfolder_match", "Klasör eşleşmesi birebir veya içerme olmalıdır.")
-        if self.document_subfolder_enabled and self.manual_folder_hierarchy_enabled:
-            raise SettingsValidationError("manual_folder_hierarchy_enabled", "Otomatik belge klasörü ve elle klasör hiyerarşisi aynı anda açılamaz.")
         if self.document_subfolder_enabled or self.manual_folder_hierarchy_enabled:
             try:
                 validate_folder_format(self.document_subfolder_format)
@@ -298,11 +296,8 @@ class RegistryStore:
             self._warnings["settings"] = "Kayıtlı ayarlar bozuk; varsayılan ayarlar açıldı. Belge listesi ve parola ayrı olarak okunur."
             return settings
         invalid_fields = "password" in config
-        # Validate CA under saved TLS; load manual mode last so a conflicting
-        # corrupt record preserves the existing automatic-subfolder behavior.
-        delayed = ("verify_tls", "manual_folder_hierarchy_enabled")
-        for name in ("verify_tls", *(key for key in _CONFIG_FIELDS if key not in delayed),
-                     "manual_folder_hierarchy_enabled"):
+        # Validate the saved CA path under the saved TLS option.
+        for name in ("verify_tls", *(key for key in _CONFIG_FIELDS if key != "verify_tls")):
             if name not in config:
                 continue
             candidate = replace(settings, **{name: config[name]})

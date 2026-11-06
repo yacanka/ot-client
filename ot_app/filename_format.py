@@ -7,7 +7,8 @@ import re
 from otClient import Document, document_file_extension
 
 DEFAULT_FILENAME_FORMAT = "{numara}"
-_TAG = re.compile(r"\{(numara|ad|revizyon)\}")
+_TAG = re.compile(r"\{(numara|ad|revizyon|index)\}")
+_INDEX = re.compile(r"[1-9][0-9]*(?:\.[1-9][0-9]*)*")
 _INVALID_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 
 
@@ -24,7 +25,7 @@ def _validate_format(value: str, label: str) -> None:
         raise ValueError(f'{label} formatı yol ayırıcı, kontrol karakteri veya <>:"/\\|?* içeremez.')
     remainder = _TAG.sub("", value)
     if "{" in remainder or "}" in remainder or not _TAG.search(value):
-        raise ValueError(f"{label} formatında {{numara}}, {{ad}} veya {{revizyon}} etiketlerini kullanın.")
+        raise ValueError(f"{label} formatında {{numara}}, {{ad}}, {{revizyon}} veya {{index}} etiketlerini kullanın.")
 
 
 def validate_filename_format(value: str) -> None:
@@ -37,39 +38,45 @@ def validate_folder_format(value: str) -> None:
     _validate_format(value, "Alt klasör adı")
 
 
-def _expand_metadata(value: str, document: Document, extension: str) -> str:
+def _expand_metadata(value: str, document: Document, extension: str, index: str | None) -> str:
+    if "{index}" in value and (not isinstance(index, str) or not _INDEX.fullmatch(index)):
+        raise ValueError("İndeks, 1'den başlayan satır sırası veya 1.2 gibi hiyerarşik sıra olmalıdır.")
     number = document.name[:-len(extension)] if extension else document.name
     values = {
         "numara": number,
         "ad": document.title.strip() or number,
         "revizyon": str(document.revision),
+        "index": index,
     }
     return _TAG.sub(lambda match: values[match.group(1)], value).strip()
 
 
-def format_document_filename(value: str, document: Document) -> str:
+def format_document_filename(value: str, document: Document, *, index: str | None = None) -> str:
     """Expand metadata once, keeping a known source extension at the end.
 
     ``numara`` is the server's name; ``ad`` is its descriptive title (falling
     back to the number when absent). Missing extensions are resolved by the
     download client from response headers. The client also sanitizes metadata
     for Windows and checks destination ownership before any file is committed.
+    ``index`` supplies the queue row's frozen position; templates using it
+    require a positive integer or dotted positive-integer string.
     """
     validate_filename_format(value)
     if value.strip() == DEFAULT_FILENAME_FORMAT:
         return document.name
     extension = document_file_extension(document.name)
-    name = _expand_metadata(value, document, extension)
+    name = _expand_metadata(value, document, extension, index)
     if extension and not name.casefold().endswith(extension.casefold()):
         name += extension
     return name
 
 
-def format_document_folder(value: str, document: Document) -> str:
+def format_document_folder(value: str, document: Document, *, index: str | None = None) -> str:
     """Expand metadata once without appending the source file extension.
 
     The storage resolver sanitizes the expanded component for Windows without a
     document ID, so documents producing the same folder name can share it.
+    ``index`` has the same required context as filename templates.
     """
     validate_folder_format(value)
-    return _expand_metadata(value, document, document_file_extension(document.name))
+    return _expand_metadata(value, document, document_file_extension(document.name), index)

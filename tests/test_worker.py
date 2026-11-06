@@ -585,6 +585,31 @@ class DownloadWorkerTests(unittest.TestCase):
         worker.run()
         self.assertEqual((existing / "ABC.pdf").read_bytes(), b"document 1")
 
+    def test_flat_indices_fall_back_to_batch_order_and_ignore_parent_links(self):
+        self.settings.filename_format = "{index}-{numara}"
+        items = [JobItem("first", "ABC", document("1"), "missing"),
+                 JobItem("second", "DEF", document("2", "DEF.pdf"), "first")]
+        self.make_worker(items).run()
+        events = self.collect()
+        self.assertEqual(self.statuses(events), ["downloading", "downloaded"] * 2)
+        root = Path(self.temporary.name)
+        self.assertEqual((root / "1-ABC.pdf").read_bytes(), b"document 1")
+        self.assertEqual((root / "2-DEF.pdf").read_bytes(), b"document 2")
+
+    def test_explicit_flat_index_is_snapshotted_and_used_for_file_and_folder(self):
+        self.settings.filename_format = "{index}-{numara}"
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_format = "{index}-{numara}"
+        items = [JobItem("chosen", "ABC", document(), row_index="7")]
+        worker = self.make_worker(items)
+        items.clear()
+        self.settings.filename_format = "{numara}"
+        self.settings.document_subfolder_format = "{numara}"
+        worker.run()
+        events = self.collect()
+        self.assertEqual(self.statuses(events), ["downloading", "downloaded"])
+        self.assertEqual((Path(self.temporary.name) / "7-ABC/7-ABC.pdf").read_bytes(), b"document 1")
+
     def test_collision_check_is_case_insensitive_for_windows(self):
         items = [
             JobItem("1", "ABC", document("1", "Same.pdf")),
