@@ -92,6 +92,7 @@ class Document:
     title: str
     author: str
     revision: int = 0
+    content_type: Literal["tds_document", "tds_form", "tds_attachment"] = "tds_document"
 
     def __str__(self) -> str:
         title = self.title[:50] + "..." if len(self.title) > 50 else self.title
@@ -586,7 +587,7 @@ class OTConnector:
         )
         self.base_url = self.client.base_url
         self._authenticated = False
-        self._path_owners: dict[tuple[str, str], str] = {}
+        self._path_owners: dict[tuple[str, str], tuple[str, str]] = {}
 
     def login(self) -> bool:
         """Authenticate once and verify access with the protected search API.
@@ -666,18 +667,45 @@ class OTConnector:
         )
 
     def search_documents(self, document_number: str) -> list[Document]:
-        """Return every match; leave exact/ambiguous selection to the caller."""
-        payload = self.search_document(document_number)
+        """Return the first nonempty source: documents, forms, then attachments.
+
+        Only valid empty results advance to the next source. Errors propagate;
+        exact/ambiguous selection belongs to the caller.
+        """
+        number = _required_identifier(document_number, "Belge numarası")
+        documents = self._parse_documents(self.search_document(number), "tds_document", "Belge araması")
+        if documents:
+            return documents
+        for query, content_type, operation in (
+            ("tds_search_forms", "tds_form", "Form araması"),
+            ("tds_search_attachments", "tds_attachment", "Ek araması"),
+        ):
+            payload = self._get_json(
+                f"/TDS/realtime-queries/{query}",
+                params={"inline": True, "input_name": number},
+                operation=operation,
+            )
+            candidates = self._parse_documents(payload, content_type, operation)
+            if candidates:
+                return candidates
+        return []
+
+    @staticmethod
+    def _parse_documents(
+        payload: dict[str, Any],
+        content_type: Literal["tds_document", "tds_form", "tds_attachment"],
+        operation: str,
+    ) -> list[Document]:
         documents: list[Document] = []
-        for index, item in enumerate(_entries(payload, "Belge araması"), 1):
+        for index, item in enumerate(_entries(payload, operation), 1):
             content = item.get("content")
             properties = content.get("properties") if isinstance(content, dict) else None
             if not isinstance(properties, dict):
-                raise OTError(f"Belge araması: {index}. kaydın content.properties alanı eksik veya bozuk.")
+                raise OTError(f"{operation}: {index}. kaydın content.properties alanı eksik veya bozuk.")
             document_id = properties.get("id")
             name = properties.get("object_name")
             if not isinstance(document_id, str) or not document_id.strip() or not isinstance(name, str) or not name.strip():
-                raise OTError(f"Belge araması: {index}. kaydın kimliği veya belge adı eksik ya da geçersiz.")
+                raise OTError(f"{operation}: {index}. kaydın kimliği veya belge adı eksik ya da geçersiz.")
             title = properties.get("title", "")
             authors = properties.get("authors", [])
             revision = properties.get("revision", 0)
@@ -686,20 +714,29 @@ class OTConnector:
             if authors is None:
                 authors = []
             if not isinstance(title, str):
-                raise OTError(f"Belge araması: {index}. kaydın başlığı metin biçiminde değil.")
+                raise OTError(f"{operation}: {index}. kaydın başlığı metin biçiminde değil.")
             if isinstance(authors, str):
                 author = " ".join(authors.split())
             elif isinstance(authors, list) and all(isinstance(item, str) for item in authors):
                 author = ", ".join(" ".join(item.split()) for item in authors if item.strip())
             else:
-                raise OTError(f"Belge araması: {index}. kaydın yazar bilgisi geçersiz.")
-            documents.append(Document(document_id.strip(), name.strip(), " ".join(title.split()), author, revision))
+                raise OTError(f"{operation}: {index}. kaydın yazar bilgisi geçersiz.")
+            documents.append(Document(document_id.strip(), name.strip(), " ".join(title.split()), author, revision, content_type))
         return documents
 
-    def get_document_by_id(self, id: str) -> dict[str, Any]:
+    @staticmethod
+    def _content_path(document_id: str, content_type: str) -> str:
+        if content_type not in ("tds_document", "tds_form", "tds_attachment"):
+            raise OTError("Belge türü tds_document, tds_form veya tds_attachment olmalıdır.")
+        return f"/TDS/contents/{content_type}/{quote(document_id, safe='')}"
+
+    def get_document_by_id(
+        self, id: str, *, content_type: Literal["tds_document", "tds_form", "tds_attachment"] = "tds_document"
+    ) -> dict[str, Any]:
+        """Fetch metadata from the selected source; default to legacy documents."""
         document_id = _document_id(id)
         return self._get_json(
-            f"/TDS/contents/tds_document/{quote(document_id, safe='')}",
+            self._content_path(document_id, content_type),
             operation="Belge bilgisi",
         )
 
@@ -722,17 +759,20 @@ class OTConnector:
         if target.exists() and not target.is_file():
             raise OTError("İndirme hedefinde aynı adlı bir klasör veya özel dosya var. Farklı bir ad seçin.")
 
-    def _target_path(self, folder: Path, filename: str, document_id: str) -> Path:
+    def _target_path(self, folder: Path, filename: str, document_key: tuple[str, str]) -> Path:
         folder_key = str(folder).casefold()
+        content_type, document_id = document_key
+        # Preserve legacy collision filenames for document-only callers.
+        collision_id = document_id if content_type == "tds_document" else f"{content_type}\0{document_id}"
         candidate = filename
         sequence = 0
         while True:
             key = (folder_key, candidate.casefold())
             owner = self._path_owners.get(key)
-            if owner is None or owner == document_id:
+            if owner is None or owner == document_key:
                 break
             sequence += 1
-            tag = hashlib.sha256(f"{document_id}\0{filename}\0{sequence}".encode("utf-8")).hexdigest()[:12]
+            tag = hashlib.sha256(f"{collision_id}\0{filename}\0{sequence}".encode("utf-8")).hexdigest()[:12]
             candidate = _add_filename_tag(filename, tag)
         # Casefold on every platform so Linux tests exercise Windows collisions.
         matches = [path for path in folder.iterdir() if path.name.casefold() == candidate.casefold()]
@@ -752,6 +792,7 @@ class OTConnector:
         cancel_event: threading.Event | None = None,
         progress: Callable[[int, int | None], None] | None = None,
         source_name: str | None = None,
+        content_type: Literal["tds_document", "tds_form", "tds_attachment"] = "tds_document",
     ) -> DownloadResult:
         """Stream, validate, SHA256-compare, and atomically commit one document.
 
@@ -761,8 +802,12 @@ class OTConnector:
         A cancel requested after the atomic replacement cannot undo the commit.
         When renaming, ``source_name`` retains the original document's extension
         and media-type evidence; a custom title cannot authorize JSON/HTML data.
+        ``content_type`` selects the source retained from search results; errors
+        never trigger a fallback to another source.
         """
         document_id = _document_id(id)
+        content_path = self._content_path(document_id, content_type)
+        document_key = (content_type, document_id)
         _check_cancelled(cancel_event)
         response: requests.Response | None = None
         temporary_path: Path | None = None
@@ -771,7 +816,7 @@ class OTConnector:
             folder.mkdir(parents=True, exist_ok=True)
             folder = folder.resolve()
             response = self.client.get(
-                f"/TDS/contents/tds_document/{quote(document_id, safe='')}/media",
+                f"{content_path}/media",
                 headers={"Accept": "*/*", "Accept-Encoding": "identity"},
                 stream=True,
                 operation="Belge indirme",
@@ -780,7 +825,7 @@ class OTConnector:
             filename = _download_filename(response, document_id, file_name, source_name=source_name)
             media_name = source_name if source_name is not None else file_name
             allow_json, allow_html = _validate_media_headers(response, media_name, filename)
-            target = self._target_path(folder, filename, document_id)
+            target = self._target_path(folder, filename, document_key)
             total = _content_length(response)
             reporter = _ProgressReporter(progress, total)
             reporter.emit(0, force=True)
@@ -817,13 +862,13 @@ class OTConnector:
                 old_hash = get_local_file_sha256(target, cancel_event=cancel_event)
                 _check_cancelled(cancel_event)
                 if old_hash == digest.hexdigest():
-                    self._path_owners[(str(folder).casefold(), target.name.casefold())] = document_id
+                    self._path_owners[(str(folder).casefold(), target.name.casefold())] = document_key
                     reporter.emit(received, force=True)
                     return DownloadResult(target, "unchanged", 0)
             _check_cancelled(cancel_event)
             os.replace(temporary_path, target)
             temporary_path = None
-            self._path_owners[(str(folder).casefold(), target.name.casefold())] = document_id
+            self._path_owners[(str(folder).casefold(), target.name.casefold())] = document_key
             reporter.emit(received, force=True)
             return DownloadResult(target, "updated" if existed else "downloaded", received)
         except requests.exceptions.RequestException as error:

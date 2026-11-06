@@ -189,11 +189,16 @@ with OTConnector(
             document.id,
             folder_path="OT Documents",
             file_name=document.name,
+            content_type=document.content_type,
         )
         print(result.status, result.path)
 ```
 
 Örnekteki değerleri kendi çağıran uygulamanızdan sağlayın; gerçek parolayı kaynak koda yerleştirmeyin. `search_document()` ham JSON için korunmuştur. `download_document()` artık boolean yerine `DownloadResult` döndürür; `status` alanı `downloaded`, `updated` veya `unchanged` olabilir. Hatalar `OTError`, iptal `DownloadCancelled` ile bildirilir. Aynı istemciyi birden çok iş parçacığında paylaşmayın.
+
+`search_documents()` numarayı önce `tds_search_documents` üzerinde arar. Sonuç boşsa `tds_search_forms`, o da boşsa `tds_search_attachments` sorgulanır. İlk dolu aday listesi kullanılır; sonraki kaynaklara istek atılmaz. Çoklu adaylarda mevcut seçim kuralları uygulanır. Hatalar boş sonuç sayılmaz ve sonraki kaynağa geçilmez.
+
+Sonucun `content_type` alanını `download_document()` veya `get_document_by_id()` çağrısına aktarın. Bilgi `/TDS/contents/{content_type}/{id}`, dosya aynı adresin `/media` yolundan alınır. Türler `tds_document`, `tds_form` ve `tds_attachment` olabilir; varsayılan `tds_document` olarak korunur. İndirme hatasında diğer kaynağa geçilmez. `search_document()` yalnızca doküman aramasının ham JSON yanıtını döndürür.
 
 ## Kurumsal ağ ve çevrimdışı kurulum
 

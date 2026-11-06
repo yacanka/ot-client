@@ -54,10 +54,10 @@ class WorkerEvent:
 
 
 def _unique_documents(candidates: Iterable[Document]) -> list[Document]:
-    """Collapse duplicate search rows that refer to the same document ID."""
-    unique: dict[str, Document] = {}
+    """Collapse duplicate search rows that refer to the same source and document ID."""
+    unique: dict[tuple[str, str], Document] = {}
     for candidate in candidates:
-        unique.setdefault(str(candidate.id), candidate)
+        unique.setdefault((candidate.content_type, str(candidate.id)), candidate)
     return list(unique.values())
 
 
@@ -66,7 +66,7 @@ def select_document(number: str, candidates: Iterable[Document]) -> Document | N
 
     Compare the trimmed requested number to each full server name with casefold.
     Extensions remain significant: ``ABC.pdf`` and ``ABC.docx`` do not become
-    equally exact matches for ``ABC``. Duplicate rows for one document ID count
+    equally exact matches for ``ABC``. Duplicate rows for one source and document ID count
     once; multiple distinct exact matches, or multiple nonexact results, require
     an explicit user selection. An empty result also returns ``None``; the caller
     distinguishes it from an ambiguous result before invoking this function.
@@ -159,7 +159,7 @@ class DownloadWorker(threading.Thread):
         for item in items:
             self._status(item, "cancelled", "İşlem başlamadan iptal edildi.")
 
-    def _process_item(self, connector, item: JobItem, filenames: dict[tuple[str, str], str]) -> None:
+    def _process_item(self, connector, item: JobItem, filenames: dict[tuple[str, str], tuple[str, str]]) -> None:
         selected = item.document
         if selected is None:
             self._status(item, "searching", "Belge aranıyor…")
@@ -200,16 +200,16 @@ class DownloadWorker(threading.Thread):
         source_name = selected.name if self._settings.filename_format.strip() != DEFAULT_FILENAME_FORMAT else None
         target_name = safe_windows_filename(file_name, selected.id)
         normalized = (str(Path(output_dir).expanduser().resolve()).casefold(), target_name.casefold())
-        document_id = str(selected.id)
+        document_key = (selected.content_type, str(selected.id))
         owner = filenames.get(normalized)
-        if owner is not None and owner != document_id:
+        if owner is not None and owner != document_key:
             raise OTError(
                 f"Farklı belgeler aynı dosya adını kullanıyor: {target_name}. "
                 "Önceki dosya korundu. Bu belgeyi ayrı bir hedef klasöre indirin."
             )
         # Reserve before downloading: even a failed attempt must not let another
         # document overwrite a same-named file already present in this batch.
-        filenames[normalized] = document_id
+        filenames[normalized] = document_key
         self._status(item, "downloading", "Belge indiriliyor…", document=selected)
         progress = _ThrottledProgress(
             lambda downloaded, total: self._emit(
@@ -222,6 +222,7 @@ class DownloadWorker(threading.Thread):
                 output_dir,
                 file_name=file_name,
                 source_name=source_name,
+                content_type=selected.content_type,
                 overwrite=self._force,
                 cancel_event=self._cancel,
                 progress=progress,
@@ -251,7 +252,7 @@ class DownloadWorker(threading.Thread):
         total = len(self._items)
         cancelled = False
         fatal_reported = False
-        filenames: dict[tuple[str, str], str] = {}
+        filenames: dict[tuple[str, str], tuple[str, str]] = {}
         self._emit("advance", done=0, total=total)
         try:
             if not total:

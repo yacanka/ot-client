@@ -78,10 +78,12 @@ class FakeConnector:
         cancel_event=None,
         progress=None,
         source_name=None,
+        content_type="tds_document",
     ):
         self.downloads.append(
             {
                 "id": identifier,
+                "content_type": content_type,
                 "folder_path": folder_path,
                 "file_name": file_name,
                 "source_name": source_name,
@@ -145,6 +147,10 @@ class MatchPolicyTests(unittest.TestCase):
             select_document("ABC.pdf", [document("1", "old name"), exact]), exact
         )
 
+    def test_same_id_from_different_sources_is_ambiguous(self):
+        form = Document("1", "ABC.pdf", "", "", content_type="tds_form")
+        self.assertIsNone(select_document("ABC.pdf", [document("1"), form]))
+
     def test_empty_result_has_no_selection(self):
         self.assertIsNone(select_document("ABC", []))
 
@@ -195,6 +201,40 @@ class DownloadWorkerTests(unittest.TestCase):
         self.assertEqual(len(finished), 1)
         self.assertIs(events[-1], finished[0])
         return finished[0].payload
+
+    def test_form_source_survives_search_and_selected_retry(self):
+        form = Document("1", "ABC.pdf", "", "", content_type="tds_form")
+        self.client.results["ABC"] = [form]
+        self.make_worker().run()
+        self.assertIn("downloaded", self.statuses(self.collect()))
+        self.make_worker([JobItem("retry", "ABC", form)]).run()
+        self.assertIn("downloaded", self.statuses(self.collect()))
+        self.assertEqual(self.client.searches, ["ABC"])
+        self.assertEqual([call["content_type"] for call in self.client.downloads], ["tds_form", "tds_form"])
+
+    def test_same_id_different_source_cannot_overwrite_batch_file(self):
+        form = Document("1", "ABC.pdf", "", "", content_type="tds_form")
+        self.make_worker([JobItem("doc", "ABC", document()), JobItem("form", "ABC", form)]).run()
+        events = self.collect()
+        self.assertEqual(self.statuses(events, "form"), ["error"])
+        self.assertEqual(len(self.client.downloads), 1)
+
+    def test_attachment_source_survives_search_and_selected_retry(self):
+        form = Document("1", "ABC.pdf", "", "", content_type="tds_attachment")
+        self.client.results["ABC"] = [form]
+        self.make_worker().run()
+        self.assertIn("downloaded", self.statuses(self.collect()))
+        self.make_worker([JobItem("retry", "ABC", form)]).run()
+        self.assertIn("downloaded", self.statuses(self.collect()))
+        self.assertEqual(self.client.searches, ["ABC"])
+        self.assertEqual([call["content_type"] for call in self.client.downloads], ["tds_attachment", "tds_attachment"])
+
+    def test_attachment_same_id_different_source_cannot_overwrite_batch_file(self):
+        form = Document("1", "ABC.pdf", "", "", content_type="tds_attachment")
+        self.make_worker([JobItem("doc", "ABC", document()), JobItem("form", "ABC", form)]).run()
+        events = self.collect()
+        self.assertEqual(self.statuses(events, "form"), ["error"])
+        self.assertEqual(len(self.client.downloads), 1)
 
     def test_login_failure_is_fatal_and_never_marks_pending_items_successful(self):
         self.client.login_error = OTError("Oturum açılamadı")

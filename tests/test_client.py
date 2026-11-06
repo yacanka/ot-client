@@ -161,6 +161,8 @@ class ClientTests(ClientTestCase):
         self.session.responses = [
             FakeResponse(status=302, headers={"Location": "/TDS/"}),
             FakeResponse({"entries": []}),
+            FakeResponse({"entries": []}),
+            FakeResponse({"entries": []}),
         ]
         self.assertTrue(self.client.login())
         self.assertEqual(self.session.calls[0][0], "POST")
@@ -176,9 +178,9 @@ class ClientTests(ClientTestCase):
         self.assertTrue(self.session.calls[1][1].endswith("/TDS/realtime-queries/tds_search_documents"))
 
     def test_test_connection_performs_real_authentication_probe(self):
-        self.session.responses = [FakeResponse(), FakeResponse({"entries": []})]
+        self.session.responses = [FakeResponse(), FakeResponse({"entries": []}), FakeResponse({"entries": []}), FakeResponse({"entries": []})]
         self.assertTrue(self.client.test_connection())
-        self.assertEqual([call[0] for call in self.session.calls], ["POST", "GET"])
+        self.assertEqual([call[0] for call in self.session.calls], ["POST", "GET", "GET", "GET"])
 
     def test_login_cannot_succeed_when_probe_returns_login_html(self):
         self.session.responses = [
@@ -202,7 +204,7 @@ class ClientTests(ClientTestCase):
     def test_custom_ca_and_tls_choice_reach_transport(self):
         for verify in ("C:/Certificates/corporate-ca.pem", False):
             with self.subTest(verify=verify):
-                self.session.responses = [FakeResponse({"entries": []})]
+                self.session.responses = [FakeResponse({"entries": []}), FakeResponse({"entries": []}), FakeResponse({"entries": []})]
                 client = OTConnector("https://OT.example", verify=verify)
                 client.search_documents("POL.001")
                 self.assertEqual(self.session.calls[-1][2]["verify"], verify)
@@ -241,6 +243,7 @@ class ClientTests(ClientTestCase):
     def test_search_returns_all_candidates_with_metadata(self):
         self.session.responses = [
             FakeResponse({"entries": [entry(title="  A \n document  ", authors=[" Ada  Kaya ", "Can"]), entry("090002", "POL.002")]}),
+            FakeResponse({"entries": []}),
         ]
         documents = self.client.search_documents("POL")
         self.assertEqual(len(documents), 2)
@@ -249,7 +252,7 @@ class ClientTests(ClientTestCase):
         self.assertEqual(self.session.calls[0][2]["params"], {"inline": True, "input_name": "POL"})
 
     def test_empty_entries_mean_no_matches(self):
-        self.session.responses = [FakeResponse({"entries": []})]
+        self.session.responses = [FakeResponse({"entries": []}), FakeResponse({"entries": []}), FakeResponse({"entries": []})]
         self.assertEqual(self.client.search_documents("missing"), [])
 
     def test_missing_or_malformed_search_schema_is_an_error(self):
@@ -265,7 +268,7 @@ class ClientTests(ClientTestCase):
                     self.client.search_documents("POL.001")
 
     def test_optional_metadata_can_be_absent(self):
-        self.session.responses = [FakeResponse({"entries": [{"content": {"properties": {"id": "1", "object_name": "POL"}}}]})]
+        self.session.responses = [FakeResponse({"entries": [{"content": {"properties": {"id": "1", "object_name": "POL"}}}]}), FakeResponse({"entries": []})]
         self.assertEqual(self.client.search_documents("POL"), [Document("1", "POL", "", "")])
 
     def test_compatibility_raw_search_and_encoded_document_id(self):
@@ -286,7 +289,7 @@ class ClientTests(ClientTestCase):
         self.session.responses = [FakeResponse({"entries": [{"id": "1", "title": "Folder", "content": {}, "summary": "omit"}]})]
         self.assertEqual(self.client.get_document_titles(), [{"id": "1", "title": "Folder"}])
         self.assertEqual(self.session.calls[-1][2]["params"]["input_folder_id"], "configured-folder")
-        self.session.responses = [FakeResponse({"entries": []})]
+        self.session.responses = [FakeResponse({"entries": []}), FakeResponse({"entries": []}), FakeResponse({"entries": []})]
         self.assertEqual(self.client.get_document_titles("override"), [])
         self.assertEqual(self.session.calls[-1][2]["params"]["input_folder_id"], "override")
 
@@ -320,12 +323,138 @@ class CredentialIsolationTests(unittest.TestCase):
                 self.assertEqual(options["verify"], "/synthetic/ca.pem")
 
 
+class FormSearchTests(ClientTestCase):
+    def test_document_result_stops_search(self):
+        self.session.responses = [
+            FakeResponse({"entries": [entry("doc", "ABC")]}),
+            FakeResponse({"entries": [entry("form", "ABC")]}),
+        ]
+        results = self.client.search_documents(" ABC ")
+        self.assertEqual([item.id for item in results], ["doc"])
+        self.assertEqual([url.rsplit("/", 1)[-1] for _, url, _ in self.session.calls],
+                         ["tds_search_documents"])
+        for _, _, options in self.session.calls:
+            self.assertEqual(options["params"], {"inline": True, "input_name": "ABC"})
+
+    def test_forms_are_returned_when_documents_are_empty(self):
+        self.session.responses = [FakeResponse({"entries": []}),
+                                  FakeResponse({"entries": [entry("form", "ABC")]})]
+        results = self.client.search_documents("ABC")
+        self.assertEqual([item.id for item in results], ["form"])
+        self.assertEqual(results[0].content_type, "tds_form")
+        self.assertEqual(len(self.session.calls), 2)
+
+    def test_form_search_failure_stops_search(self):
+        for response in (FakeResponse(status=403), FakeResponse(ValueError()),
+                         FakeResponse({"entries": [{}]})):
+            with self.subTest(response=response):
+                self.session.responses = [FakeResponse({"entries": []}), response]
+                with self.assertRaises(OTError):
+                    self.client.search_documents("ABC")
+                self.assertTrue(response.closed)
+
+    def test_attachment_search_errors_are_not_empty_results(self):
+        for response in (FakeResponse(status=403), FakeResponse(ValueError()),
+                         FakeResponse({"entries": [{}]})):
+            with self.subTest(response=response):
+                self.session.responses = [FakeResponse({"entries": []}),
+                                          FakeResponse({"entries": []}), response]
+                with self.assertRaises(OTError):
+                    self.client.search_documents("ABC")
+                self.assertTrue(response.closed)
+
+    def test_attachments_are_searched_only_after_two_empty_results(self):
+        self.session.responses = [FakeResponse({"entries": []}), FakeResponse({"entries": []}),
+                                  FakeResponse({"entries": [entry("att", "ABC"), entry("att2", "ABC")]})]
+        results = self.client.search_documents(" ABC ")
+        self.assertEqual([item.id for item in results], ["att", "att2"])
+        self.assertTrue(all(item.content_type == "tds_attachment" for item in results))
+        self.assertEqual([url.rsplit("/", 1)[-1] for _, url, _ in self.session.calls],
+                         ["tds_search_documents", "tds_search_forms", "tds_search_attachments"])
+        for _, _, options in self.session.calls:
+            self.assertEqual(options["params"], {"inline": True, "input_name": "ABC"})
+
+    def test_form_details_use_singular_content_endpoint_and_encode_id(self):
+        self.session.responses = [FakeResponse({"id": "form"})]
+        self.assertEqual(self.client.get_document_by_id("a/b", content_type="tds_form"), {"id": "form"})
+        self.assertTrue(self.session.calls[-1][1].endswith("/TDS/contents/tds_form/a%2Fb"))
+
+    def test_attachment_details_use_singular_content_endpoint_and_encode_id(self):
+        self.session.responses = [FakeResponse({"id": "form"})]
+        self.assertEqual(self.client.get_document_by_id("a/b", content_type="tds_attachment"), {"id": "form"})
+        self.assertTrue(self.session.calls[-1][1].endswith("/TDS/contents/tds_attachment/a%2Fb"))
+
+    def test_invalid_content_type_is_rejected_before_io(self):
+        for content_type in ("tds_forms", "../tds_form", "", None, []):
+            with self.subTest(content_type=content_type):
+                with self.assertRaises(OTError):
+                    self.client.get_document_by_id("1", content_type=content_type)
+                with self.assertRaises(OTError):
+                    self.client.download_document("1", "unused", content_type=content_type)
+        self.assertEqual(self.session.calls, [])
+
+
 class DownloadTests(ClientTestCase):
     def setUp(self):
         super().setUp()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.folder = Path(temporary.name).resolve()
+
+    def test_legacy_document_collision_filename_remains_stable(self):
+        self.response([b"%PDF-first"])
+        self.client.download_document("1", self.folder, "ABC.pdf")
+        self.response([b"%PDF-second"])
+        result = self.client.download_document("2", self.folder, "ABC.pdf")
+        self.assertEqual(result.path.name, "ABC__586a9346af9e.pdf")
+
+    def test_form_download_preserves_same_id_document_file(self):
+        self.response([b"%PDF-document"])
+        document = self.client.download_document("1", self.folder, "ABC.pdf")
+        self.response([b"%PDF-form"])
+        form = self.client.download_document("1", self.folder, "ABC.pdf", content_type="tds_form")
+        self.assertTrue(self.session.calls[-1][1].endswith("/TDS/contents/tds_form/1/media"))
+        self.assertNotEqual(document.path, form.path)
+        self.assertEqual(document.path.read_bytes(), b"%PDF-document")
+        self.assertEqual(form.path.read_bytes(), b"%PDF-form")
+        self.response([b"%PDF-form"])
+        repeated = self.client.download_document("1", self.folder, "ABC.pdf", content_type="tds_form")
+        self.assertEqual(repeated.path, form.path)
+        self.assertEqual(repeated.status, "unchanged")
+
+    def test_attachment_download_preserves_same_id_document_file(self):
+        self.response([b"%PDF-document"])
+        document = self.client.download_document("1", self.folder, "ABC.pdf")
+        self.response([b"%PDF-form"])
+        form = self.client.download_document("1", self.folder, "ABC.pdf", content_type="tds_attachment")
+        self.assertTrue(self.session.calls[-1][1].endswith("/TDS/contents/tds_attachment/1/media"))
+        self.assertNotEqual(document.path, form.path)
+        self.assertEqual(document.path.read_bytes(), b"%PDF-document")
+        self.assertEqual(form.path.read_bytes(), b"%PDF-form")
+        self.response([b"%PDF-form"])
+        repeated = self.client.download_document("1", self.folder, "ABC.pdf", content_type="tds_attachment")
+        self.assertEqual(repeated.path, form.path)
+        self.assertEqual(repeated.status, "unchanged")
+
+    def test_form_download_failure_preserves_file_without_fallback(self):
+        target = self.folder / "ABC.pdf"
+        target.write_bytes(b"original")
+        self.session.responses = [FakeResponse(status=404)]
+        with self.assertRaises(OTError):
+            self.client.download_document("1", self.folder, target.name, content_type="tds_form")
+        self.assertEqual(target.read_bytes(), b"original")
+        self.assertEqual(len(self.session.calls), 1)
+        self.assertEqual(list(self.folder.iterdir()), [target])
+
+    def test_attachment_download_failure_preserves_file_without_fallback(self):
+        target = self.folder / "ABC.pdf"
+        target.write_bytes(b"original")
+        self.session.responses = [FakeResponse(status=404)]
+        with self.assertRaises(OTError):
+            self.client.download_document("1", self.folder, target.name, content_type="tds_attachment")
+        self.assertEqual(target.read_bytes(), b"original")
+        self.assertEqual(len(self.session.calls), 1)
+        self.assertEqual(list(self.folder.iterdir()), [target])
 
     def response(self, chunks, *, mime="application/pdf", filename=None, length=None):
         headers = {"Content-Type": mime}
@@ -704,6 +833,18 @@ class LoopbackProtocolTests(unittest.TestCase):
                     number = parse_qs(parsed.query).get("input_name", [""])[0]
                     entries = [entry(name="POL.001")] if number == "POL.001" else []
                     self.send_body(json.dumps({"entries": entries}).encode("utf-8"), "application/json")
+                elif parsed.path == "/TDS/realtime-queries/tds_search_forms":
+                    number = parse_qs(parsed.query).get("input_name", [""])[0]
+                    entries = [entry("form001", "FORM.001")] if number == "FORM.001" else []
+                    self.send_body(json.dumps({"entries": entries}).encode("utf-8"), "application/json")
+                elif parsed.path == "/TDS/realtime-queries/tds_search_attachments":
+                    number = parse_qs(parsed.query).get("input_name", [""])[0]
+                    entries = [entry("att001", "ATT.001")] if number == "ATT.001" else []
+                    self.send_body(json.dumps({"entries": entries}).encode("utf-8"), "application/json")
+                elif parsed.path == "/TDS/contents/tds_attachment/att001/media":
+                    self.send_body(b"%PDF-attachment-fixture", "application/pdf")
+                elif parsed.path == "/TDS/contents/tds_form/form001/media":
+                    self.send_body(b"%PDF-form-fixture", "application/pdf")
                 elif parsed.path == "/TDS/contents/tds_document/090001/media":
                     self.send_body(b"%PDF-fixture", "application/pdf")
                 elif parsed.path == "/TDS/contents/tds_document/broken/media":
@@ -744,6 +885,24 @@ class LoopbackProtocolTests(unittest.TestCase):
         self.client.password = "incorrect-password"
         with self.assertRaises(OTError):
             self.client.login()
+
+    def test_authenticated_form_search_and_download(self):
+        self.client.login()
+        documents = self.client.search_documents("FORM.001")
+        self.assertEqual(len(documents), 1)
+        form = documents[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self.client.download_document(form.id, temporary, form.name, content_type=form.content_type)
+            self.assertEqual(result.path.read_bytes(), b"%PDF-form-fixture")
+
+    def test_authenticated_attachment_search_and_download(self):
+        self.client.login()
+        documents = self.client.search_documents("ATT.001")
+        self.assertEqual(len(documents), 1)
+        form = documents[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self.client.download_document(form.id, temporary, form.name, content_type=form.content_type)
+            self.assertEqual(result.path.read_bytes(), b"%PDF-attachment-fixture")
 
     def test_real_requests_truncated_body_preserves_old_file(self):
         self.client.login()
