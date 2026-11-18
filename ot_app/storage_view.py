@@ -119,29 +119,28 @@ class StorageView(SettingsPage):
 
     def _build_hierarchy_card(self) -> None:
         card = self._card(1)
-        card.configure(style="SettingsHierarchy.TFrame")
-        ttk.Label(card, text="Klasör hiyerarşisi", style="SettingsHierarchyTitle.TLabel").grid(
+        ttk.Label(card, text="Klasör hiyerarşisi", style="SettingsCardTitle.TLabel").grid(
             row=0, column=0, sticky="w"
         )
         self.manual_folder_hierarchy_enabled_button = ttk.Checkbutton(
             card, text="Klasör hiyerarşisini manuel düzenle",
-            variable=self.manual_folder_hierarchy_enabled_var, style="SettingsHierarchy.TCheckbutton",
+            variable=self.manual_folder_hierarchy_enabled_var, style="SettingsCard.TCheckbutton",
         )
-        self.manual_folder_hierarchy_enabled_button.grid(row=1, column=0, sticky="w", pady=(10, 7))
+        self.manual_folder_hierarchy_enabled_button.grid(row=1, column=0, sticky="w", pady=(10, 5))
         self._editable.append(self.manual_folder_hierarchy_enabled_button)
         explanation = ttk.Label(
             card, text="Belgeleri üst ve alt klasörler olarak düzenleyin. Özel belge klasörleriyle "
             "birlikte kullanılabilir. Alt belgesi olan üst belgeler için her zaman klasör oluşturulur. "
             "Özel belge klasörü kapalıysa alt belgesi olmayan belgeler üst klasöre, "
             "üst klasörü de olmayanlar indirme konumuna kaydedilir.",
-            style="SettingsHierarchy.TLabel", wraplength=580, justify="left",
+            style="CardMuted.TLabel", wraplength=580, justify="left",
         )
-        explanation.grid(row=2, column=0, sticky="ew")
+        explanation.grid(row=2, column=0, sticky="ew", pady=(5, 0))
         controls_hint = ttk.Label(
             card, text="Belgeler tablosunda ↑ ↓ aynı seviyedeki sıralamayı alt belgelerle birlikte "
             "değiştirir; ← → üst / alt seviyeyi düzenler. Ardışık kardeş belgeler birlikte "
             "taşınabilir. Yapı saklanır; önceden indirilen dosyalar taşınmaz.",
-            style="SettingsHierarchy.TLabel", wraplength=580, justify="left",
+            style="CardMuted.TLabel", wraplength=580, justify="left",
         )
         controls_hint.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         self._wrap_labels.extend((explanation, controls_hint))

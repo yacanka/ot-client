@@ -3,11 +3,9 @@
 import os
 import sys
 import unittest
-from tkinter import ttk
 
 from ot_app.app import Application
 from ot_app.settings import RegistryStore
-from ot_app.theme import BLUE_PALE
 from tests.test_settings import FakeProtector, FakeRegistry
 
 
@@ -110,8 +108,9 @@ class StorageModesUITests(unittest.TestCase):
         self.assertEqual(hierarchy_card.master, view._scroll_frame)
         self.assertLess(output_card.winfo_y(), hierarchy_card.winfo_y())
         self.assertLess(hierarchy_card.winfo_y(), folder_card.winfo_y())
-        style = ttk.Style(view)
-        self.assertEqual(style.lookup(hierarchy_card.cget("style"), "background"), BLUE_PALE)
+        self.assertEqual(hierarchy_card.cget("style"), folder_card.cget("style"))
+        self.assertEqual(view.manual_folder_hierarchy_enabled_button.cget("style"),
+                         view.document_subfolder_enabled_button.cget("style"))
         footer_y = view.save_button.winfo_rooty()
         for field in ("manual_folder_hierarchy_enabled", "download_related_attachments"):
             view.focus_field(field)
