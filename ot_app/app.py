@@ -174,7 +174,8 @@ class Application(DocumentActions, tk.Tk):
         selected_filter = view.filter_var.get()
         return (selected_filter == "Tüm belgeler" or
                 selected_filter == "Bekleyen" and row.status in {"pending", "searching", "downloading"} or
-                selected_filter == "Tamamlanan" and row.status in SUCCESS or
+                selected_filter == "Güncel" and row.status in {"downloaded", "unchanged"} or
+                selected_filter == "Güncellenen" and row.status == "updated" or
                 selected_filter == "Sorunlu" and row.status in PROBLEMS or
                 selected_filter == "Seçim gerekli" and (row.status == "ambiguous" or bool(row.candidates)))
 

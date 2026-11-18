@@ -70,6 +70,27 @@ class UserFlowTests(unittest.TestCase):
         self.assertEqual(self.app.rows[visible[0]].number, "PLAN-050")
         self.assertEqual(len(self.app.rows), 2)
 
+    def test_completed_document_status_filters(self):
+        self.app.add_numbers(["DOC-001", "DOC-002", "DOC-003", "DOC-004"])
+        current, updated, downloaded, pending = self.app.rows.values()
+        current.status = "unchanged"
+        updated.status = "updated"
+        downloaded.status = "downloaded"
+        view = self.app.documents_view
+        options = view.filter_box.cget("values")
+        self.assertNotIn("Tamamlanan", options)
+
+        for label, visible in (
+            ("Güncel", (current.key, downloaded.key)),
+            ("Güncellenen", (updated.key,)),
+            ("Bekleyen", (pending.key,)),
+        ):
+            with self.subTest(filter=label):
+                view.filter_box.current(options.index(label))
+                self.app.refresh_table()
+                self.assertEqual(view.tree.get_children(), visible)
+                self.assertEqual(view.done_var.get(), "3")
+
     def test_settings_and_documents_navigation_preserves_input(self):
         self.app.add_numbers(["DOC-001"])
         self.app.show_view("settings")

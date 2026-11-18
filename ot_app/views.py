@@ -100,7 +100,8 @@ class DocumentsView(ttk.Frame):
         self.search_entry = ttk.Entry(toolbar, textvariable=self.search_var, width=18)
         self.search_entry.grid(row=0, column=1, sticky="ew", padx=(0, 8))
         self.filter_box = ttk.Combobox(toolbar, textvariable=self.filter_var, state="readonly", width=17,
-                                      values=("Tüm belgeler", "Bekleyen", "Tamamlanan", "Sorunlu", "Seçim gerekli"))
+                                      values=("Tüm belgeler", "Bekleyen", "Güncel", "Güncellenen",
+                                              "Sorunlu", "Seçim gerekli"))
         self.filter_box.grid(row=0, column=2, padx=(0, 8))
         self.list_menu = tk.Menu(toolbar, tearoff=False)
         self.list_menu.add_command(label="Listeyi dışa aktar…", command=self.callbacks["export"])
