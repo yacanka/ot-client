@@ -162,7 +162,7 @@ class DocumentsView(ttk.Frame):
         self.context_menu = tk.Menu(self.tree, tearoff=False)
         self.context_menu.add_command(label="Seçileni indir", command=self.callbacks["selected"])
         self.context_menu.add_command(label="Seçileni kaldır", command=self.callbacks["remove"])
-        self.context_menu.add_command(label="Belge numarasını düzenle…", command=self.callbacks["edit"])
+        self.context_menu.add_command(label="Belgeyi düzenle…", command=self.callbacks["edit"])
         self.tree.bind("<Button-3>", self._show_context_menu)
         if self.tk.call("tk", "windowingsystem") == "aqua":
             self.tree.bind("<Button-2>", self._show_context_menu)

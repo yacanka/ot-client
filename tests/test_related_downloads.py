@@ -77,6 +77,16 @@ class RelatedDownloadTests(unittest.TestCase):
     def paths(self):
         return [urlsplit(url).path for _, url, _ in self.session.calls]
 
+    def test_manual_parent_title_does_not_leak_into_related_names(self):
+        self.settings.filename_format = "{ad}"
+        self.settings.document_subfolder_enabled = True
+        self.settings.document_subfolder_format = "{ad}"
+        events = self.run_worker(items=[JobItem("row", "DOC", self.document, custom_title="Manual")])
+        self.assertEqual(self.last_status(events)["status"], "downloaded")
+        self.assertEqual(sorted(path.name for path in (self.root / "Manual").iterdir()),
+                         ["Attachment title.pdf", "Form title.pdf", "Manual.pdf"])
+        self.assertEqual(self.last_status(events)["document"], self.document)
+
     def test_options_control_each_category_and_default_path_has_no_extra_request(self):
         for forms, attachments in ((False, False), (True, False), (False, True), (True, True)):
             with self.subTest(forms=forms, attachments=attachments):

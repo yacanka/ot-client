@@ -17,3 +17,4 @@ class QueueRow:
     size: int | None = None
     chosen: bool = False
     parent_key: str | None = None
+    custom_title: str = ""

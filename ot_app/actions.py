@@ -4,8 +4,8 @@ from itertools import chain
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
-from .dialogs import BulkInputDialog, CandidateDialog, DocumentNumberDialog
-from .documents import merge_document_numbers, parse_document_text, read_document_file, write_csv_report, write_document_file
+from .dialogs import BulkInputDialog, CandidateDialog, DocumentNumberDialog, DocumentEditDialog
+from .documents import merge_document_numbers, normalize_custom_title, parse_document_text, read_document_file, write_csv_report, write_document_file
 from .hierarchy import HierarchyEntry, HierarchyError, move_hierarchy, remove_hierarchy, validate_hierarchy
 from .queue_model import QueueRow
 from .views import STATUS_LABELS
@@ -14,6 +14,12 @@ from .views import STATUS_LABELS
 @dataclass(frozen=True)
 class _DocumentNumberEditUndo:
     original: QueueRow
+
+
+@dataclass(frozen=True)
+class _DocumentTitleEditUndo:
+    key: str
+    title: str
 
 
 class DocumentActions:
@@ -152,6 +158,42 @@ class DocumentActions:
                                     for row_key, row in self.rows.items()])
         return number
 
+    def _title_overrides(self):
+        return {row.number: row.custom_title for row in self.rows.values() if row.custom_title}
+
+    def edit_document(self):
+        """Edit local naming without replacing server metadata or existing files."""
+        selected = self.selected_rows()
+        if self.busy or len(selected) != 1:
+            return
+        row = selected[0]
+        key = row.key
+        dialog = DocumentEditDialog(
+            self, row.number, validate=lambda raw: self._validate_document_number_edit(key, raw),
+            custom_title=row.custom_title,
+            server_title=(row.document.title or row.document.name) if row.document else "",
+        )
+        if dialog.result is None or self.busy or key not in self.rows:
+            return
+        try:
+            number = self._validate_document_number_edit(key, dialog.result[0])
+            title = normalize_custom_title(dialog.result[1])
+        except ValueError as exc:
+            self.set_notice(str(exc), "warning")
+            return
+        row = self.rows[key]
+        if number == row.number and title == row.custom_title:
+            return
+        if number != row.number:
+            self._undo = _DocumentNumberEditUndo(replace(row))
+            self.rows[key] = QueueRow(number, key=key, parent_key=row.parent_key, custom_title=title)
+        else:
+            self._undo = _DocumentTitleEditUndo(key, row.custom_title)
+            row.custom_title = title
+        self.schedule_document_save()
+        self.refresh_table()
+        self.set_notice("Belge güncellendi. Adlandırma sonraki indirmede uygulanır. Ctrl+Z ile geri alabilirsiniz.")
+
     def edit_document_number(self):
         """Rename one queue identity; its old download results remain available to undo."""
         selected = self.selected_rows()
@@ -173,7 +215,7 @@ class DocumentActions:
         if number == row.number:
             return
         self._undo = _DocumentNumberEditUndo(replace(row))
-        self.rows[key] = QueueRow(number, key=key, parent_key=row.parent_key)
+        self.rows[key] = QueueRow(number, key=key, parent_key=row.parent_key, custom_title=row.custom_title)
         self.schedule_document_save()
         self.refresh_table()
         self.set_notice("Belge numarası güncellendi. Ctrl+Z ile geri alabilirsiniz.")
@@ -204,6 +246,17 @@ class DocumentActions:
 
     def undo_remove(self):
         if self.busy or not self._undo:
+            return
+        if isinstance(self._undo, _DocumentTitleEditUndo):
+            snapshot = self._undo
+            if snapshot.key not in self.rows:
+                self.set_notice("Geri alınamadı: düzenlenen belge artık listede değil.", "warning")
+                return
+            self.rows[snapshot.key].custom_title = snapshot.title
+            self._undo = None
+            self.schedule_document_save()
+            self.refresh_table()
+            self.set_notice("Özel belge adı değişikliği geri alındı.")
             return
         if isinstance(self._undo, _DocumentNumberEditUndo):
             self._undo_document_number_edit(self._undo)
@@ -295,7 +348,7 @@ class DocumentActions:
         try:
             header = ["Belge numarası", "Belge adı", "Durum", "Açıklama", "Dosya"]
             values = (
-                [row.number, row.document.title if row.document else "",
+                [row.number, row.custom_title or (row.document.title if row.document else ""),
                  STATUS_LABELS.get(row.status, row.status), row.message, row.path]
                 for row in rows
             )

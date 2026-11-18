@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .documents import MAX_DOCUMENTS, MAX_INPUT_CHARACTERS, merge_document_numbers
+from .documents import MAX_DOCUMENTS, MAX_INPUT_CHARACTERS, merge_document_numbers, normalize_custom_title
 from .filename_format import DEFAULT_FILENAME_FORMAT, validate_filename_format, validate_folder_format
 from .hierarchy import HierarchyEntry, validate_hierarchy
 from .win_secrets import DPAPIProtector, MAX_SECRET_BYTES
@@ -24,6 +24,7 @@ REGISTRY_PATH = r"Software\OTDesktop"
 SETTINGS_VALUE = "Settings"
 DOCUMENTS_VALUE = "Documents"
 HIERARCHY_VALUE = "DocumentHierarchy"
+TITLES_VALUE = "DocumentTitleOverrides"
 PASSWORD_VALUE = "Password"
 REG_SZ = 1
 REG_BINARY = 3
@@ -233,6 +234,19 @@ class _WindowsRegistry:
             pass
 
 
+def _serialize_titles(documents, titles):
+    numbers = set(documents)
+    if not isinstance(titles, dict) or any(number not in numbers for number in titles):
+        raise ValueError("Özel adlar belge listesiyle eşleşmelidir.")
+    cleaned = {number: normalize_custom_title(title) for number, title in titles.items()}
+    record = json.dumps({"version": 1, "documents_sha256": _documents_digest(documents),
+                         "titles": {number: title for number, title in cleaned.items() if title}},
+                        ensure_ascii=False)
+    if len(record) > MAX_CONFIG_CHARACTERS:
+        raise ValueError("Özel belge adları izin verilen kayıt boyutunu aşıyor.")
+    return record
+
+
 class RegistryStore:
     """Save settings under HKCU\\Software\\OTDesktop, without elevation.
 
@@ -250,6 +264,7 @@ class RegistryStore:
         self._memory_settings = AppSettings()
         self._memory_documents: list[str] = []
         self._memory_hierarchy: str | None = None
+        self._memory_titles: str | None = None
         self._session_only = registry is None and (platform or sys.platform) != "win32"
         if self._session_only:
             self._warnings["platform"] = "Windows dışında çalışıyor: ayarlar, parola ve belge listesi yalnızca bu oturumda tutulur; uygulama kapanınca silinir."
@@ -407,41 +422,75 @@ class RegistryStore:
             self._warnings["hierarchy"] = "Kayıtlı belge hiyerarşisi geçersiz veya belge listesiyle eşleşmiyor; belgeler kökte açıldı. Mevcut kayıt değiştirilmedi."
             return roots
 
-    def save_documents(self, documents: list[str], *, hierarchy: dict[str, str | None] | None = None) -> None:
+    def load_title_overrides(self, documents: list[str]) -> dict[str, str]:
+        """Read optional queue-bound titles without overwriting damaged records."""
+        canonical = merge_document_numbers([], documents)
+        self._warnings.pop("titles", None)
+        value = self._memory_titles if self._session_only else self._read_value(
+            TITLES_VALUE, REG_SZ, "titles", "özel belge adları")
+        if value is _MISSING or value is None:
+            return {}
+        try:
+            if not isinstance(value, str) or len(value) > MAX_CONFIG_CHARACTERS:
+                raise ValueError
+            record = json.loads(value)
+            if (not isinstance(record, dict) or type(record.get("version")) is not int
+                    or record["version"] != 1 or record.get("documents_sha256") != _documents_digest(canonical)):
+                raise ValueError
+            titles = record.get("titles")
+            _serialize_titles(canonical, titles)
+            return {number: normalize_custom_title(title) for number, title in titles.items()}
+        except (ValueError, TypeError, RecursionError):
+            self._warnings["titles"] = "Kayıtlı özel belge adları geçersiz veya listeyle eşleşmiyor; sunucu adları kullanılacak. Mevcut kayıt değiştirilmedi."
+            return {}
+
+    def save_documents(self, documents: list[str], *, hierarchy: dict[str, str | None] | None = None,
+                       title_overrides: dict[str, str] | None = None) -> None:
         """Autosave queue/optional hierarchy without reading or changing secrets.
 
-        Omitted hierarchy metadata and its recovery warning remain untouched.
+        Omitted hierarchy/title metadata and recovery warnings remain untouched.
+        An empty title mapping explicitly clears overrides; load() stays compatible.
         """
         canonical = merge_document_numbers([], documents)
+        titles_record = _serialize_titles(canonical, title_overrides) if title_overrides is not None else None
         hierarchy_record = _serialize_hierarchy(canonical, hierarchy) if hierarchy is not None else None
         if self._session_only:
             self._memory_documents = list(canonical)
+            if titles_record is not None:
+                self._memory_titles = titles_record
+                self._warnings.pop("titles", None)
             if hierarchy_record is not None:
                 self._memory_hierarchy = hierarchy_record
                 self._warnings.pop("hierarchy", None)
             return
         try:
             self._registry.write(DOCUMENTS_VALUE, canonical, REG_MULTI_SZ)
+            if titles_record is not None:
+                self._registry.write(TITLES_VALUE, titles_record, REG_SZ)
             if hierarchy_record is not None:
                 self._registry.write(HIERARCHY_VALUE, hierarchy_record, REG_SZ)
         except (OSError, ValueError, TypeError):
             self._save_error("Belge listesi Windows kayıt defterine kaydedilemedi. Liste bu oturumda kullanılabilir.", category="queue_write")
         self._warnings.pop("documents", None)
         self._warnings.pop("queue_write", None)
+        if titles_record is not None:
+            self._warnings.pop("titles", None)
         if hierarchy_record is not None:
             self._warnings.pop("hierarchy", None)
 
     def save(self, settings: AppSettings, documents: list[str] | None = None, *,
-             hierarchy: dict[str, str | None] | None = None) -> None:
+             hierarchy: dict[str, str | None] | None = None,
+             title_overrides: dict[str, str] | None = None) -> None:
         """Save configuration/secret and optionally replace the document queue.
 
         ``None`` (including an omitted argument) never reads or writes Documents.
         Pass an explicit list, including ``[]``, to replace the persisted queue.
         """
         settings.validate()
-        if hierarchy is not None and documents is None:
+        if (hierarchy is not None or title_overrides is not None) and documents is None:
             raise ValueError("Hiyerarşi kaydedilirken belge listesi de verilmelidir.")
         canonical = merge_document_numbers([], documents) if documents is not None else None
+        titles_record = _serialize_titles(canonical, title_overrides) if title_overrides is not None else None
         hierarchy_record = _serialize_hierarchy(canonical, hierarchy) if hierarchy is not None else None
         config_values = {name: getattr(settings, name) for name in _CONFIG_FIELDS}
         config = json.dumps(config_values, ensure_ascii=False, allow_nan=False)
@@ -451,6 +500,9 @@ class RegistryStore:
             self._memory_settings = replace(settings)
             if canonical is not None:
                 self._memory_documents = list(canonical)
+            if titles_record is not None:
+                self._memory_titles = titles_record
+                self._warnings.pop("titles", None)
             if hierarchy_record is not None:
                 self._memory_hierarchy = hierarchy_record
                 self._warnings.pop("hierarchy", None)
@@ -480,6 +532,8 @@ class RegistryStore:
             self._registry.write(SETTINGS_VALUE, config, REG_SZ)
             if canonical is not None:
                 self._registry.write(DOCUMENTS_VALUE, canonical, REG_MULTI_SZ)
+            if titles_record is not None:
+                self._registry.write(TITLES_VALUE, titles_record, REG_SZ)
             if hierarchy_record is not None:
                 self._registry.write(HIERARCHY_VALUE, hierarchy_record, REG_SZ)
             if not settings.remember_password:
@@ -493,6 +547,8 @@ class RegistryStore:
         if canonical is not None:
             self._warnings.pop("documents", None)
             self._warnings.pop("queue_write", None)
+        if titles_record is not None:
+            self._warnings.pop("titles", None)
         if hierarchy_record is not None:
             self._warnings.pop("hierarchy", None)
         if protected is not None or not settings.remember_password:

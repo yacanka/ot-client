@@ -49,6 +49,7 @@ def resolve_document_folder(
     *,
     strict_descendant: bool = False,
     index: str | None = None,
+    custom_title: str = "",
 ) -> Path:
     """Reuse one matching child directory or create a sanitized folder.
 
@@ -60,11 +61,12 @@ def resolve_document_folder(
     behavior, so an explicitly selected root link remains supported.
     ``strict_descendant`` also rejects links back to this level's parent; manual
     hierarchies use it to ensure that every level advances into a child folder.
+    ``custom_title`` is an optional local override for the ``ad`` tag.
     ``index`` is the document's queue position when the folder template uses it.
     """
     if match not in ("exact", "contains"):
         raise ValueError("Alt klasör eşleştirme yöntemi exact veya contains olmalıdır.")
-    name = safe_windows_filename(format_document_folder(folder_format, document, index=index))
+    name = safe_windows_filename(format_document_folder(folder_format, document, index=index, custom_title=custom_title))
     root = Path(output_dir).expanduser()
     root.mkdir(parents=True, exist_ok=True)
     root = _resolve(root)

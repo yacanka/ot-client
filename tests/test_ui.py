@@ -17,6 +17,7 @@ class UserFlowTests(unittest.TestCase):
                 self.settings = AppSettings()
                 self.documents = []
                 self.hierarchy = {}
+                self.titles = {}
 
             def load(self):
                 return self.settings, list(self.documents)
@@ -24,13 +25,18 @@ class UserFlowTests(unittest.TestCase):
             def load_hierarchy(self, documents):
                 return {number: self.hierarchy.get(number) for number in documents}
 
-            def save(self, settings, documents=None, *, hierarchy=None):
+            def load_title_overrides(self, documents):
+                return {number: self.titles[number] for number in documents if number in self.titles}
+
+            def save(self, settings, documents=None, *, hierarchy=None, title_overrides=None):
                 self.settings = settings
                 if documents is not None:
-                    self.save_documents(documents, hierarchy=hierarchy)
+                    self.save_documents(documents, hierarchy=hierarchy, title_overrides=title_overrides)
 
-            def save_documents(self, documents, *, hierarchy=None):
+            def save_documents(self, documents, *, hierarchy=None, title_overrides=None):
                 self.documents = list(documents)
+                if title_overrides is not None:
+                    self.titles = dict(title_overrides)
                 if hierarchy is not None:
                     self.hierarchy = dict(hierarchy)
 

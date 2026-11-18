@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from otClient import Document, document_file_extension
+from .documents import normalize_custom_title
 
 DEFAULT_FILENAME_FORMAT = "{numara}"
 _TAG = re.compile(r"\{(numara|ad|revizyon|index)\}")
@@ -38,22 +39,23 @@ def validate_folder_format(value: str) -> None:
     _validate_format(value, "Alt klasör adı")
 
 
-def _expand_metadata(value: str, document: Document, extension: str, index: str | None) -> str:
+def _expand_metadata(value: str, document: Document, extension: str, index: str | None, custom_title: str = "") -> str:
     if "{index}" in value and (not isinstance(index, str) or not _INDEX.fullmatch(index)):
         raise ValueError("İndeks, 1'den başlayan satır sırası veya 1.2 gibi hiyerarşik sıra olmalıdır.")
     number = document.name[:-len(extension)] if extension else document.name
     values = {
         "numara": number,
-        "ad": document.title.strip() or number,
+        "ad": normalize_custom_title(custom_title) or document.title.strip() or number,
         "revizyon": str(document.revision),
         "index": index,
     }
     return _TAG.sub(lambda match: values[match.group(1)], value).strip()
 
 
-def format_document_filename(value: str, document: Document, *, index: str | None = None) -> str:
+def format_document_filename(value: str, document: Document, *, index: str | None = None, custom_title: str = "") -> str:
     """Expand metadata once, keeping a known source extension at the end.
 
+    ``custom_title`` overrides only ``ad``; an empty value preserves server metadata.
     ``numara`` is the server's name; ``ad`` is its descriptive title (falling
     back to the number when absent). Missing extensions are resolved by the
     download client from response headers. The client also sanitizes metadata
@@ -65,18 +67,19 @@ def format_document_filename(value: str, document: Document, *, index: str | Non
     if value.strip() == DEFAULT_FILENAME_FORMAT:
         return document.name
     extension = document_file_extension(document.name)
-    name = _expand_metadata(value, document, extension, index)
+    name = _expand_metadata(value, document, extension, index, custom_title)
     if extension and not name.casefold().endswith(extension.casefold()):
         name += extension
     return name
 
 
-def format_document_folder(value: str, document: Document, *, index: str | None = None) -> str:
+def format_document_folder(value: str, document: Document, *, index: str | None = None, custom_title: str = "") -> str:
     """Expand metadata once without appending the source file extension.
 
+    ``custom_title`` overrides only ``ad``, without changing the source document.
     The storage resolver sanitizes the expanded component for Windows without a
     document ID, so documents producing the same folder name can share it.
     ``index`` has the same required context as filename templates.
     """
     validate_folder_format(value)
-    return _expand_metadata(value, document, document_file_extension(document.name), index)
+    return _expand_metadata(value, document, document_file_extension(document.name), index, custom_title)

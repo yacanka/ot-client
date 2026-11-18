@@ -7,7 +7,7 @@ from tkinter import ttk
 from tkinter import font as tkfont
 from typing import TYPE_CHECKING, Callable
 
-from .documents import parse_document_text
+from .documents import parse_document_text, normalize_custom_title
 
 if TYPE_CHECKING:
     from otClient import Document
@@ -209,14 +209,17 @@ class DocumentNumberDialog(tk.Toplevel):
     """Edit one literal identifier, retaining the modal on validation failure."""
 
     def __init__(
-        self, parent: tk.Misc, number: str, *, validate: Callable[[str], str]
+        self, parent: tk.Misc, number: str, *, validate: Callable[[str], str],
+        custom_title: str | None = None, server_title: str = ""
     ) -> None:
         super().__init__(parent)
         self.withdraw()
-        self.title("Belge numarasını düzenle")
+        self._extended = custom_title is not None
+        heading = "Belgeyi düzenle" if self._extended else "Belge numarasını düzenle"
+        self.title(heading)
         self.configure(background="#F3F6FB")
         self.transient(parent.winfo_toplevel())
-        self.result: str | None = None
+        self.result: str | tuple[str, str] | None = None
         self._validate = validate
         self.number_var = tk.StringVar(self, value=number)
         self.error_var = tk.StringVar(self)
@@ -225,21 +228,39 @@ class DocumentNumberDialog(tk.Toplevel):
         content.grid(row=0, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
         ttk.Label(
-            content, text="Belge numarasını düzenle", style="Body.TLabel",
+            content, text=heading, style="Body.TLabel",
             font=(_family(self), 15, "bold"),
         ).grid(row=0, column=0, sticky="w")
         ttk.Label(
-            content, text="Yeni belge numarasını girin. Değişiklik sonrası belge yeniden indirilmeye hazır olur.",
+            content, text=("Belge numarası ve özel adını düzenleyin. Adlandırma sonraki indirmede uygulanır."
+                  if self._extended else "Yeni belge numarasını girin. Değişiklik sonrası belge yeniden indirilmeye hazır olur."),
             style="Muted.TLabel", wraplength=470, justify="left",
         ).grid(row=1, column=0, sticky="ew", pady=(8, 14))
         self.entry = ttk.Entry(content, textvariable=self.number_var)
-        self.entry.grid(row=2, column=0, sticky="ew")
+        if self._extended:
+            ttk.Label(content, text="Belge numarası").grid(row=2, column=0, sticky="w", pady=(0, 4))
+        self.entry.grid(row=3 if self._extended else 2, column=0, sticky="ew")
+        if self._extended:
+            fields = ttk.Frame(content)
+            fields.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+            fields.columnconfigure(0, weight=1)
+            ttk.Label(fields, text="Sunucudan gelen ad", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
+            self.server_title_var = tk.StringVar(self, value=server_title or "Henüz alınmadı")
+            self.server_title_entry = ttk.Entry(fields, textvariable=self.server_title_var, state="readonly")
+            self.server_title_entry.grid(row=1, column=0, sticky="ew")
+            ttk.Label(fields, text="Özel belge adı (isteğe bağlı)").grid(row=2, column=0, sticky="w", pady=(12, 4))
+            self.custom_title_var = tk.StringVar(self, value=custom_title)
+            self.title_entry = ttk.Entry(fields, textvariable=self.custom_title_var)
+            self.title_entry.grid(row=3, column=0, sticky="ew")
+            ttk.Label(fields, text="Boş bırakırsanız sunucudan gelen ad kullanılır.", style="Muted.TLabel").grid(row=4, column=0, sticky="w", pady=(4, 8))
+            self.reset_title_button = ttk.Button(fields, text="Sunucu adını kullan", command=lambda: self.custom_title_var.set(""))
+            self.reset_title_button.grid(row=5, column=0, sticky="w")
         ttk.Label(
             content, textvariable=self.error_var, foreground="#B42336",
             wraplength=470, justify="left",
-        ).grid(row=3, column=0, sticky="ew", pady=(8, 16))
+        ).grid(row=5, column=0, sticky="ew", pady=(8, 16))
         controls = ttk.Frame(content)
-        controls.grid(row=4, column=0, sticky="e")
+        controls.grid(row=6, column=0, sticky="e")
         self.cancel_button = ttk.Button(
             controls, text="Vazgeç", style="Subtle.TButton", command=self._cancel,
         )
@@ -253,7 +274,7 @@ class DocumentNumberDialog(tk.Toplevel):
         self.bind("<Escape>", self._cancel)
         self.protocol("WM_DELETE_WINDOW", self._cancel)
         self.resizable(False, False)
-        center(self, parent, 530, 285)
+        center(self, parent, 560 if self._extended else 530, 535 if self._extended else 285)
         self.deiconify()
         self.wait_visibility()
         self.grab_set()
@@ -262,11 +283,17 @@ class DocumentNumberDialog(tk.Toplevel):
         self.wait_window(self)
 
     def _accept(self, _event: tk.Event | None = None) -> str:
+        focus_entry = self.entry
         try:
-            self.result = self._validate(self.number_var.get())
+            number = self._validate(self.number_var.get())
+            if self._extended:
+                focus_entry = self.title_entry
+                self.result = (number, normalize_custom_title(self.custom_title_var.get()))
+            else:
+                self.result = number
         except ValueError as exc:
             self.error_var.set(str(exc))
-            self.entry.focus_set()
+            focus_entry.focus_set()
         else:
             self.destroy()
         return "break"
@@ -275,6 +302,14 @@ class DocumentNumberDialog(tk.Toplevel):
         self.result = None
         self.destroy()
         return "break"
+
+
+class DocumentEditDialog(DocumentNumberDialog):
+    """Edit the number and optional local title together; cancel returns None."""
+
+    def __init__(self, parent, number, *, validate, custom_title="", server_title=""):
+        super().__init__(parent, number, validate=validate,
+                         custom_title=custom_title, server_title=server_title)
 
 
 class CandidateDialog(tk.Toplevel):

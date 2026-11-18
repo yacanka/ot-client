@@ -169,6 +169,18 @@ class DownloadWorkerTests(unittest.TestCase):
         self.cancel = threading.Event()
         self.client = FakeConnector()
 
+    def test_searched_and_chosen_documents_use_manual_title_without_mutation(self):
+        self.settings.filename_format = "{numara} - {ad}"
+        document = Document("custom", "ABC.pdf", "Server", "")
+        self.client.results["ABC"] = [document]
+        for selected in (None, document):
+            with self.subTest(chosen=selected is not None):
+                self.make_worker([JobItem("row", "ABC", selected, custom_title="Manual")]).run()
+                events = self.collect()
+                self.assertFalse(any(event.kind == "fatal" for event in events))
+                self.assertEqual(self.client.downloads[-1]["file_name"], "ABC - Manual.pdf")
+                self.assertEqual(document.title, "Server")
+
     def make_worker(self, items=None, **kwargs):
         if items is None:
             items = [JobItem("row-1", "ABC")]

@@ -51,6 +51,9 @@ class Application(DocumentActions, tk.Tk):
             by_number = {row.number: row.key for row in self.rows.values()}
             for row in self.rows.values():
                 row.parent_key = by_number.get(hierarchy.get(row.number))
+            titles = self.store.load_title_overrides(documents)
+            for row in self.rows.values():
+                row.custom_title = titles.get(row.number, "")
             startup_warning = getattr(self.store, "warning", "")
         except (SettingsError, ValueError, OSError) as exc:
             startup_warning = f"Kayıtlı ayarlar okunamadı: {exc}"
@@ -130,7 +133,7 @@ class Application(DocumentActions, tk.Tk):
             "start": self.start_all, "selected": self.start_selected, "cancel": self.cancel_job,
             "settings": lambda: self.show_view("settings"), "choose": self.choose_candidate,
             "open_file": self.open_selected_file, "open_folder": self.open_output_folder,
-            "hierarchy": self.change_hierarchy, "edit": self.edit_document_number,
+            "hierarchy": self.change_hierarchy, "edit": self.edit_document,
         }
         self.documents_view = DocumentsView(self.content, callbacks)
         self.settings_view = SettingsView(self.content, self.settings, self.save_settings, self.test_connection)
@@ -165,7 +168,7 @@ class Application(DocumentActions, tk.Tk):
     def _is_visible(self, row):
         view = self.documents_view
         query = view.search_var.get().strip().casefold()
-        text = f"{row.number} {row.document.title if row.document else ''} {row.message}".casefold()
+        text = f"{row.number} {row.custom_title} {row.document.title if row.document else ''} {row.message}".casefold()
         if query and query not in text:
             return False
         selected_filter = view.filter_var.get()
@@ -177,6 +180,7 @@ class Application(DocumentActions, tk.Tk):
 
     def _row_values(self, row):
         title = row.document.title or row.document.name if row.document else "İşlem sırasında doldurulacak"
+        title = row.custom_title or title
         revision = row.document.revision if row.document else "—"
         return row.number, title, revision, STATUS_LABELS.get(row.status, row.status), human_bytes(row.size)
 
@@ -235,7 +239,8 @@ class Application(DocumentActions, tk.Tk):
         view.open_file_button.state(["disabled"])
         if len(selected) == 1:
             row = selected[0]
-            view.detail_var.set(row.message + (f"  ·  {row.path}" if row.path else ""))
+            view.detail_var.set(row.message + (f"  ·  {row.path}" if row.path else "")
+                                + ("  ·  Ad kaynağı: Manuel" if row.custom_title else ""))
             if row.candidates:
                 view.choose_button.grid()
             if row.path:
@@ -266,7 +271,8 @@ class Application(DocumentActions, tk.Tk):
         if not self._documents_dirty:
             return True
         try:
-            self.store.save_documents(self.numbers(), hierarchy=self._hierarchy_numbers())
+            self.store.save_documents(self.numbers(), hierarchy=self._hierarchy_numbers(),
+                                      title_overrides=self._title_overrides())
             self._documents_dirty = False
             return True
         except (SettingsError, ValueError, OSError) as exc:
@@ -302,7 +308,8 @@ class Application(DocumentActions, tk.Tk):
     def _persist_settings(self, settings):
         documents = self.numbers() if self._documents_dirty else None
         hierarchy = self._hierarchy_numbers() if self._documents_dirty else None
-        self.store.save(settings, documents, hierarchy=hierarchy)
+        self.store.save(settings, documents, hierarchy=hierarchy,
+                        title_overrides=self._title_overrides() if documents is not None else None)
 
     def save_settings(self):
         if self.busy:
@@ -382,12 +389,12 @@ class Application(DocumentActions, tk.Tk):
                    else {key: str(index) for index, key in enumerate(self.rows, 1)})
         hierarchy = tuple(
             JobItem(row.key, row.number, row.document if row.chosen else None, row.parent_key,
-                    row_index=indices[row.key])
+                    row_index=indices[row.key], custom_title=row.custom_title)
             for row in self.rows.values()
         ) if settings.manual_folder_hierarchy_enabled else None
         items = ([item for item in hierarchy if item.key in requested] if hierarchy is not None else
                  [JobItem(row.key, row.number, row.document if row.chosen else None,
-                          row_index=indices[row.key]) for row in rows])
+                          row_index=indices[row.key], custom_title=row.custom_title) for row in rows])
         for row in rows:
             row.status, row.message, row.size = "pending", "İşlem sırasına alındı.", None
             row.candidates = ()

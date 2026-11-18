@@ -25,6 +25,22 @@ class DocumentInputError(ValueError):
     """An input cannot be safely interpreted as a document-number list."""
 
 
+def normalize_custom_title(value: str) -> str:
+    """Validate a literal optional display title; paths are sanitized at output."""
+    if not isinstance(value, str):
+        raise ValueError("Özel belge adı metin olmalıdır.")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("Özel belge adı kontrol karakterleri içeremez.")
+    title = value.strip()
+    if len(title) > 1024:
+        raise ValueError("Özel belge adı en fazla 1.024 karakter olabilir.")
+    try:
+        title.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("Özel belge adı geçerli Unicode metni olmalıdır.") from None
+    return title
+
+
 def _canonical_number(value: str) -> str:
     if not isinstance(value, str):
         raise DocumentInputError("Belge numaralarının tamamı metin olmalıdır.")

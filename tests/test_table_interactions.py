@@ -230,7 +230,7 @@ class TableInteractionTests(unittest.TestCase):
         self.assertEqual(self.tree.selection(), (self.keys["C"],))
         self.assertEqual(self.tree.focus(), self.keys["C"])
         self.assertEqual(self.view.context_menu.entrycget(2, "state"), "normal")
-        self.assertEqual(self.view.context_menu.entrycget(2, "label"), "Belge numarasını düzenle…")
+        self.assertEqual(self.view.context_menu.entrycget(2, "label"), "Belgeyi düzenle…")
 
     def test_context_click_blank_or_header_keeps_selection_without_menu(self):
         self.select("B", "C")

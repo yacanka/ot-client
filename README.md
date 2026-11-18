@@ -106,6 +106,7 @@ HKEY_CURRENT_USER\Software\OTDesktop
 |---|---|---|
 | Settings | REG_SZ | Bağlantı bilgileri, indirme konumu, dosya/alt klasör adlandırma ve eşleştirme ayarları, TLS/CA seçenekleri ve şifreli parola kaydının bağlantı eşleşmesi. Parola içermez. |
 | Documents | REG_MULTI_SZ | Belge numaraları. |
+| DocumentTitleOverrides | REG_SZ | Sürümlü, belge listesine bağlı özel adlar; sunucudan gelen veriden ayrı tutulur. |
 | DocumentHierarchy | REG_SZ | Sürümlü manuel klasör ağacı; sıralı belge listesine bağlı doğrulama özeti ve üst satır konumları. |
 | Password | REG_BINARY | Windows DPAPI ile geçerli kullanıcı hesabına bağlı şifrelenmiş parola. |
 
@@ -116,6 +117,27 @@ Sekme sırası **Belgeler → Depolama → Bağlantı** şeklindedir. Her iki ay
 Parolayı hatırla seçeneğini kapatıp kaydederseniz saklanan parola silinir. Hatırlama açıkken parola alanını boş bırakmak eski şifreli kaydı korur; parolayı kaldırmak için seçeneği kapatın. Kayıtlı parola yalnızca ilişkili sunucu ve kullanıcıyla kullanılabilir. Sunucu/kullanıcı değişirse, yapılandırma bozulursa veya parola yazımı yarıda kalırsa parola yeniden istenir; şifreli kayıt silinmez. Eski kayıt biçimi okunmaya devam eder; yeni kayıtlarda bağlantı bilgileri ve şifreli verinin SHA256 değeri ek metadata olarak tutulur. Bu değer düz metin parolanın özeti değildir. Kayıt defterine düz metin parola veya Base64 yazılmaz. DPAPI bir erişim izni sistemi değildir: sizin Windows oturumunuzdaki uygulamalara karşı ayrı bir güvenlik sınırı oluşturmaz. Şifreli değeri başka bir bilgisayara/kullanıcıya taşımak genellikle işe yaramaz; o ortamda parolayı yeniden girin.
 
 Windows dışında uygulama test/geliştirme amacıyla açılabilir; kayıt defteri yerine açıkça belirtilen geçici oturum modu kullanılır. Bu modda ayarlar diske kaydedilmez.
+
+### Belgeye özel ad verme
+
+Belgeler tablosunda bir satıra sağ tıklayıp **Belgeyi düzenle…** seçin.
+**Özel belge adı (isteğe bağlı)** alanına yazdığınız ad tabloda, aramada,
+sonuç raporunda ve dosya/klasör formatlarının `{ad}` etiketinde kullanılır.
+**Sunucudan gelen ad** karşılaştırma için salt okunur gösterilir; özel ad
+vermek belge aramasını veya sunucudaki kaydı değiştirmez.
+
+Alanı boş bırakmak veya **Sunucu adını kullan** düğmesine basıp **Kaydet**
+demek otomatik ada geri döndürür. **Vazgeç** değişiklikleri iptal eder.
+Yalnızca ad düzenlendiğinde mevcut eşleşme ve indirme sonucu korunur;
+**Ctrl+Z** önceki özel adı geri getirir. Numara düzenlendiğinde özel ad
+korunur, eski arama/indirme sonuçları sıfırlanır.
+
+Özel ad otomatik kaydedilir ve Windows'ta yeniden açılışta korunur.
+Windows dışında mevcut oturumluk saklama geçerlidir. En fazla 1.024 karakter
+kabul edilir; baştaki/sondaki boşluklar temizlenir, kontrol karakterleri reddedilir.
+Önceden indirilmiş dosyalar taşınmaz veya yeniden adlandırılmaz; yeni adlandırma
+sonraki indirmede uygulanır. `{numara}` formatı etkilenmez. İlgili form ve ekler
+kendi adlarını kullanır. Liste içe/dışa aktarımı yalnızca belge numaralarını taşır.
 
 ### İndirilen dosyaların adı
 

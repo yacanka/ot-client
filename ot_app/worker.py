@@ -48,6 +48,7 @@ class JobItem:
     document: Document | None = None
     parent_key: str | None = None
     row_index: str | None = None
+    custom_title: str = ""
 
 
 @dataclass(frozen=True)
@@ -245,7 +246,7 @@ class DownloadWorker(threading.Thread):
                 folder = resolve_document_folder(
                     parent, selected, self._settings.document_subfolder_format,
                     self._settings.document_subfolder_match, strict_descendant=True,
-                    index=self._row_indices[node.key],
+                    index=self._row_indices[node.key], custom_title=node.custom_title,
                 )
             self._check_cancelled()
             return _HierarchyResolution(document=selected, folder=folder)
@@ -337,7 +338,7 @@ class DownloadWorker(threading.Thread):
                     selected,
                     self._settings.document_subfolder_format,
                     self._settings.document_subfolder_match,
-                    index=self._row_indices[item.key],
+                    index=self._row_indices[item.key], custom_title=item.custom_title,
                 )
             except FolderAmbiguityError as error:
                 self._status(
@@ -352,7 +353,7 @@ class DownloadWorker(threading.Thread):
                        output_dir: str | Path, filenames) -> None:
         self._check_cancelled()
         file_name, source_name = self._reserve_filename(
-            selected, output_dir, filenames, self._row_indices[item.key]
+            selected, output_dir, filenames, self._row_indices[item.key], item.custom_title
         )
         self._status(item, "downloading", "Belge indiriliyor…", document=selected)
         progress = _ThrottledProgress(
@@ -397,8 +398,8 @@ class DownloadWorker(threading.Thread):
                 status = "error"
         self._status(item, status, message, document=selected, path=str(result.path))
 
-    def _reserve_filename(self, selected, output_dir, filenames, index: str) -> tuple[str, str | None]:
-        file_name = format_document_filename(self._settings.filename_format, selected, index=index)
+    def _reserve_filename(self, selected, output_dir, filenames, index: str, custom_title: str = "") -> tuple[str, str | None]:
+        file_name = format_document_filename(self._settings.filename_format, selected, index=index, custom_title=custom_title)
         source_name = selected.name if self._settings.filename_format.strip() != DEFAULT_FILENAME_FORMAT else None
         target_name = safe_windows_filename(file_name, selected.id)
         normalized = (str(Path(output_dir).expanduser().resolve()).casefold(), target_name.casefold())

@@ -59,6 +59,17 @@ class HierarchyWorkerTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             item.row_index = "2"
 
+    def test_unselected_ancestor_uses_its_own_custom_title(self):
+        self.settings.document_subfolder_format = "{ad}"
+        self.settings.filename_format = "{ad}"
+        parent = replace(self.item("a"), custom_title="Manual parent")
+        child = replace(self.item("b", "a"), custom_title="Manual child")
+        events = self.run_worker([child], hierarchy=(parent, child))
+        self.assertEqual(self.last(events, "b")["status"], "downloaded")
+        self.assertTrue((self.root / "Manual parent" / "Manual child.pdf").is_file())
+        self.assertFalse((self.root / "Manual parent" / "Manual parent.pdf").exists())
+        self.assertEqual(self.last(events, "b")["document"].title, "")
+
     def test_folder_options_cover_all_four_combinations(self):
         items = [self.item("a"), self.item("b", "a"), self.item("c", "b")]
         for manual, individual, expected, calls in (
